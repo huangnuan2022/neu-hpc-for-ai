@@ -1,0 +1,9 @@
+flash_attn_cuda
+*.o
+*.obj
+*.exe
+*.out
+*~
+.DS_Store
+.vscode/
+.idea/
