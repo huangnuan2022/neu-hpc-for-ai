@@ -1,0 +1,38 @@
+# Compiled object files
+*.o
+*.obj
+
+# Static and shared libraries
+*.a
+*.so
+*.dylib
+*.dll
+
+# Executable files
+*.out
+*.exe
+
+# CUDA intermediate outputs
+*.cubin
+*.fatbin
+*.ptx
+
+# Build directories
+build/
+cmake-build*/
+
+# VS Code settings
+.vscode/
+
+# macOS system files
+.DS_Store
+
+# Temporary and swap files
+*~
+*.swp
+*.swo
+*.tmp
+
+# Python cache (if any Python scripts exist)
+__pycache__/
+*.pyc
