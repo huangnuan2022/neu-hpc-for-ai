@@ -507,9 +507,9 @@ def parser() -> argparse.ArgumentParser:
     pre.add_argument("--ami-id", default=None)
     pre.set_defaults(func=preflight)
 
-    bud = sub.add_parser("create-budget", help="Create a $20-style monthly AWS Budget email alert.", parents=[common_region])
+    bud = sub.add_parser("create-budget", help="Create a $50-style monthly AWS Budget email alert.", parents=[common_region])
     bud.add_argument("--email", required=True)
-    bud.add_argument("--limit-usd", type=float, default=20.0)
+    bud.add_argument("--limit-usd", type=float, default=50.0)
     bud.add_argument("--name", default="llm-harness-cost-guard")
     bud.set_defaults(func=create_budget)
 

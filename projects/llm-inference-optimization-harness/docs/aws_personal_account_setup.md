@@ -61,7 +61,7 @@ Create a budget alert:
 ```bash
 python3 scripts/aws_gpu_benchmark.py create-budget \
   --email YOUR_EMAIL@example.com \
-  --limit-usd 20
+  --limit-usd 50
 ```
 
 Run cheap single-GPU first:

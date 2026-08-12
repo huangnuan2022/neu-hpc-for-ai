@@ -4,7 +4,7 @@ This runbook is for collecting real CUDA/NCCL benchmark numbers for the LLM infe
 
 ## Cost Guard Model
 
-AWS is pay-as-you-go, not a strict prepaid card. A `$20` budget does not automatically cap charges by itself. The safe pattern here is:
+AWS is pay-as-you-go, not a strict prepaid card. A `$50` budget does not automatically cap charges by itself. The safe pattern here is:
 
 1. Create a budget alert.
 2. Launch a temporary GPU instance with an explicit TTL.
@@ -51,7 +51,7 @@ Approximate `us-east-1` On-Demand compute rates used by the script:
 ```bash
 python3 scripts/aws_gpu_benchmark.py create-budget \
   --email YOUR_EMAIL@example.com \
-  --limit-usd 20
+  --limit-usd 50
 ```
 
 AWS will send confirmation mail for the budget subscription. Confirm it before launching resources.
