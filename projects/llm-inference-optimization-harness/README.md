@@ -77,6 +77,11 @@ make -C cuda_nccl
 mpirun -np 2 ./cuda_nccl/moe_nccl --case cases/case1
 ```
 
+For an end-to-end AWS run with budget alerts, TTL cleanup, benchmark download, and automatic EC2 termination, see:
+
+- `docs/aws_gpu_runbook.md`
+- `scripts/aws_gpu_benchmark.py`
+
 ## Resume-Safe Positioning
 
 Use the generated `results/benchmark_summary.md` rather than guessed numbers. On CPU-only machines, claim correctness-gated benchmark coverage and memory-estimate reduction, not GPU speedup. On a multi-GPU box, add measured latency, throughput, and memory metrics from the CUDA/NCCL path.

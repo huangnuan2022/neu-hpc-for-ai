@@ -36,6 +36,10 @@ Results are written to:
 - `projects/llm-inference-optimization-harness/results/benchmark_results.csv`
 - `projects/llm-inference-optimization-harness/results/benchmark_results.json`
 
+AWS GPU runbook with budget alerts, TTL cleanup, result download, and automatic EC2 termination:
+
+- `projects/llm-inference-optimization-harness/docs/aws_gpu_runbook.md`
+
 ## Related CUDA/NCCL Implementations
 
 - `week_08/dist-flash-attn`: distributed FlashAttention-style CUDA/NCCL implementation.
