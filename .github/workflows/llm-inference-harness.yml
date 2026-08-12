@@ -1,0 +1,34 @@
+name: LLM Inference Harness
+
+on:
+  push:
+    paths:
+      - "projects/llm-inference-optimization-harness/**"
+      - ".github/workflows/llm-inference-harness.yml"
+  pull_request:
+    paths:
+      - "projects/llm-inference-optimization-harness/**"
+      - ".github/workflows/llm-inference-harness.yml"
+
+jobs:
+  benchmark-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: projects/llm-inference-optimization-harness
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Smoke tests
+        run: make test
+      - name: Benchmark and correctness gate
+        run: make bench
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-inference-harness-results
+          path: |
+            projects/llm-inference-optimization-harness/results/benchmark_results.csv
+            projects/llm-inference-optimization-harness/results/benchmark_results.json
+            projects/llm-inference-optimization-harness/results/benchmark_summary.md
