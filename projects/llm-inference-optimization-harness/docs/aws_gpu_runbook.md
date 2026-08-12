@@ -23,6 +23,11 @@ aws configure
 aws sts get-caller-identity
 ```
 
+For a personal AWS account with a scoped IAM user, see:
+
+- `docs/aws_personal_account_setup.md`
+- `aws/gpu-benchmark-iam-policy.json`
+
 Your account also needs GPU quota for the chosen instance family. For a first run, use `g5.xlarge` or `g4dn.xlarge`. For a stronger multi-GPU NCCL run, use `g5.12xlarge` or `g4dn.12xlarge`.
 
 ## Estimate Cost
