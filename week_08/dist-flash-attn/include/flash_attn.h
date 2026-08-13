@@ -1,43 +1,47 @@
-
 #pragma once
 
-#include <cuda_runtime.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct {
-    int seq_len;    // total sequence length
-    int dim;        // head dimension
-    int num_gpus;   // number of GPUs to use (1..8)
+    int seq_len;
+    int dim;
+    int num_gpus;
+    int overlap_kv_rotation;
 } FlashAttnConfig;
 
-// Single GPU FlashAttention forward (reference / baseline).
-// Q, K, V, and out are all device pointers on a single GPU.
-// Shapes: [seq_len, dim]
-void flash_attn_single_gpu_forward(
-    const float* d_q,
-    const float* d_k,
-    const float* d_v,
-    float* d_out,
-    const FlashAttnConfig* cfg,
-    cudaStream_t stream);
+typedef struct FlashAttnWorkspace FlashAttnWorkspace;
 
-// Multi-GPU distributed FlashAttention forward using a ring-based
-// sequence parallelism scheme.
-// Each GPU owns seq_len / num_gpus query/key/value vectors.
-// The d_q, d_k, d_v, d_out arrays are of length num_gpus;
-// element i is a device pointer on GPU i with shape [local_seq_len, dim].
-//
-// For simplicity we assume seq_len is divisible by num_gpus and
-// local_seq_len = seq_len / num_gpus.
-void flash_attn_multi_gpu_forward(
-    float** d_q,
-    float** d_k,
-    float** d_v,
-    float** d_out,
-    const FlashAttnConfig* cfg);
+FlashAttnWorkspace* flash_attn_workspace_create(const FlashAttnConfig* cfg);
+
+void flash_attn_workspace_destroy(FlashAttnWorkspace* workspace);
+
+// Stages the local K/V shards into reusable internal ring buffers. This is
+// intentionally outside the steady-state timed forward pass.
+void flash_attn_workspace_prepare_kv(
+    FlashAttnWorkspace* workspace,
+    float* const* d_k,
+    float* const* d_v);
+
+// Executes state initialization, streaming attention, NCCL K/V rotation, and
+// output finalization. Returns the maximum per-device CUDA-event duration.
+double flash_attn_workspace_forward(
+    FlashAttnWorkspace* workspace,
+    float* const* d_q,
+    float* const* d_out);
+
+size_t flash_attn_workspace_bytes_per_gpu(const FlashAttnWorkspace* workspace);
+
+size_t flash_attn_workspace_measured_delta_bytes(
+    const FlashAttnWorkspace* workspace,
+    int gpu_index);
+
+size_t flash_attn_minimal_state_bytes_per_gpu(const FlashAttnConfig* cfg);
+
+size_t flash_attn_full_score_matrix_bytes(const FlashAttnConfig* cfg);
 
 #ifdef __cplusplus
 }

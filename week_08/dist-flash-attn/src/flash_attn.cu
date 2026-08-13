@@ -1,7 +1,6 @@
-
 #include <math.h>
-#include <float.h>
 #include <stdio.h>
+
 #include "flash_attn.h"
 #include "utils.h"
 
@@ -9,39 +8,36 @@
 #define WARP_SIZE 32
 #endif
 
-// Simple block-wide reduction for float sums.
-__inline__ __device__ float warp_reduce_sum(float val)
+#define MAX_GPUS 8
+
+__inline__ __device__ float warp_reduce_sum(float value)
 {
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
-        val += __shfl_down_sync(0xffffffff, val, offset);
+        value += __shfl_down_sync(0xffffffff, value, offset);
     }
-    return val;
+    return value;
 }
 
-__inline__ __device__ float block_reduce_sum(float val)
+__inline__ __device__ float block_reduce_sum(float value)
 {
-    static __shared__ float shared[32]; // max 32 warps per block
-    int lane = threadIdx.x % WARP_SIZE;
-    int wid  = threadIdx.x / WARP_SIZE;
+    static __shared__ float warp_sums[32];
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int warp = threadIdx.x / WARP_SIZE;
 
-    val = warp_reduce_sum(val); // each warp reduces to lane 0
-
+    value = warp_reduce_sum(value);
     if (lane == 0) {
-        shared[wid] = val;
+        warp_sums[warp] = value;
     }
     __syncthreads();
 
-    // only first warp loads the warp results
-    val = (threadIdx.x < blockDim.x / WARP_SIZE) ? shared[lane] : 0.0f;
-
-    if (wid == 0) {
-        val = warp_reduce_sum(val);
+    const int warp_count = (blockDim.x + WARP_SIZE - 1) / WARP_SIZE;
+    value = threadIdx.x < warp_count ? warp_sums[lane] : 0.0f;
+    if (warp == 0) {
+        value = warp_reduce_sum(value);
     }
-
-    return val;
+    return value;
 }
 
-// Initialize streaming softmax state for all local queries.
 __global__ void init_flash_state_kernel(
     float* __restrict__ m,
     float* __restrict__ l,
@@ -49,117 +45,82 @@ __global__ void init_flash_state_kernel(
     int num_q,
     int dim)
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // m and l: one per query
-    if (idx < num_q) {
-        m[idx] = -1e30f; // "minus infinity" sentinel
-        l[idx] = 0.0f;
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < num_q) {
+        m[index] = -INFINITY;
+        l[index] = 0.0f;
     }
-
-    // acc: num_q * dim elements
-    int total = num_q * dim;
-    if (idx < total) {
-        acc[idx] = 0.0f;
+    const int total = num_q * dim;
+    if (index < total) {
+        acc[index] = 0.0f;
     }
 }
 
-// One streaming FlashAttention step over a chunk of keys/values.
-//
-// Each block processes a single query vector, computing its interaction
-// with chunk_len keys. The kernel maintains a numerically stable running
-// softmax using the usual (m, l) trick:
-//
-//   m_new = max(m, s)
-//   l_new = l * exp(m - m_new) + exp(s - m_new)
-//   acc   = acc * exp(m - m_new) + V * exp(s - m_new)
-//
-// After all chunks have been processed, acc / l is the final output.
 __global__ void flash_attn_step_kernel(
-    const float* __restrict__ q,         // [num_q, dim]
-    const float* __restrict__ k_chunk,   // [chunk_len, dim]
-    const float* __restrict__ v_chunk,   // [chunk_len, dim]
-    float* __restrict__ acc,             // [num_q, dim]
-    float* __restrict__ m,               // [num_q]
-    float* __restrict__ l,               // [num_q]
+    const float* __restrict__ q,
+    const float* __restrict__ k_chunk,
+    const float* __restrict__ v_chunk,
+    float* __restrict__ acc,
+    float* __restrict__ m,
+    float* __restrict__ l,
     int num_q,
     int chunk_len,
     int dim,
     float scale)
 {
-    int q_idx = blockIdx.x;
-    if (q_idx >= num_q) return;
+    const int query = blockIdx.x;
+    if (query >= num_q) {
+        return;
+    }
 
     extern __shared__ float shared[];
-    float* q_sh   = shared;          // dim floats
-    float* acc_sh = q_sh + dim;      // dim floats
-    float* tmp    = acc_sh + dim;    // at least 2 floats
+    float* q_shared = shared;
+    float* acc_shared = q_shared + dim;
+    float* update = acc_shared + dim;
 
-    // Load query into shared memory
     for (int d = threadIdx.x; d < dim; d += blockDim.x) {
-        q_sh[d] = q[q_idx * dim + d];
+        q_shared[d] = q[(size_t)query * dim + d];
+        acc_shared[d] = acc[(size_t)query * dim + d];
     }
-
-    // Load current acc for this query into shared
-    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
-        acc_sh[d] = acc[q_idx * dim + d];
-    }
-
     __syncthreads();
 
-    float m_i = m[q_idx];
-    float l_i = l[q_idx];
-
-    for (int key_idx = 0; key_idx < chunk_len; ++key_idx) {
-        // Compute dot(q_i, k_j)
-        float thread_sum = 0.0f;
+    float row_max = m[query];
+    float row_sum = l[query];
+    for (int key = 0; key < chunk_len; ++key) {
+        float partial = 0.0f;
         for (int d = threadIdx.x; d < dim; d += blockDim.x) {
-            float qv = q_sh[d];
-            float kv = k_chunk[key_idx * dim + d];
-            thread_sum += qv * kv;
+            partial += q_shared[d] * k_chunk[(size_t)key * dim + d];
         }
 
-        float score = block_reduce_sum(thread_sum);
+        float score = block_reduce_sum(partial);
         if (threadIdx.x == 0) {
             score *= scale;
-
-            float m_new = fmaxf(m_i, score);
-            float exp_m = __expf(m_i - m_new);
-            float exp_s = __expf(score - m_new);
-
-            m_i = m_new;
-            l_i = l_i * exp_m + exp_s;
-
-            tmp[0] = exp_m;
-            tmp[1] = exp_s;
+            const float new_max = fmaxf(row_max, score);
+            const float old_scale = expf(row_max - new_max);
+            const float score_scale = expf(score - new_max);
+            row_max = new_max;
+            row_sum = row_sum * old_scale + score_scale;
+            update[0] = old_scale;
+            update[1] = score_scale;
         }
-
         __syncthreads();
 
-        float exp_m = tmp[0];
-        float exp_s = tmp[1];
-
-        // Update accumulator vector
         for (int d = threadIdx.x; d < dim; d += blockDim.x) {
-            float vval = v_chunk[key_idx * dim + d];
-            acc_sh[d] = acc_sh[d] * exp_m + vval * exp_s;
+            acc_shared[d] = acc_shared[d] * update[0]
+                + v_chunk[(size_t)key * dim + d] * update[1];
         }
-
         __syncthreads();
     }
 
-    // Write back updated accumulator and state
     for (int d = threadIdx.x; d < dim; d += blockDim.x) {
-        acc[q_idx * dim + d] = acc_sh[d];
+        acc[(size_t)query * dim + d] = acc_shared[d];
     }
-
     if (threadIdx.x == 0) {
-        m[q_idx] = m_i;
-        l[q_idx] = l_i;
+        m[query] = row_max;
+        l[query] = row_sum;
     }
 }
 
-// Finalize outputs: out = acc / l
 __global__ void finalize_output_kernel(
     const float* __restrict__ acc,
     const float* __restrict__ l,
@@ -167,218 +128,307 @@ __global__ void finalize_output_kernel(
     int num_q,
     int dim)
 {
-    int q_idx = blockIdx.x;
-    if (q_idx >= num_q) return;
-
-    float norm = l[q_idx];
-    if (norm <= 0.0f) norm = 1.0f;
-
+    const int query = blockIdx.x;
+    if (query >= num_q) {
+        return;
+    }
+    const float denominator = l[query] > 0.0f ? l[query] : 1.0f;
     for (int d = threadIdx.x; d < dim; d += blockDim.x) {
-        float v = acc[q_idx * dim + d];
-        out[q_idx * dim + d] = v / norm;
+        out[(size_t)query * dim + d] = acc[(size_t)query * dim + d] / denominator;
     }
 }
 
-/******************************
- * Single GPU implementation  *
- ******************************/
+struct FlashAttnWorkspace {
+    FlashAttnConfig cfg;
+    int local_seq_len;
+    size_t state_bytes;
+    size_t chunk_bytes;
+    size_t workspace_bytes_per_gpu;
+    size_t measured_delta_bytes[MAX_GPUS];
+    ncclComm_t comms[MAX_GPUS];
+    cudaStream_t compute_streams[MAX_GPUS];
+    cudaStream_t communication_streams[MAX_GPUS];
+    cudaEvent_t start_events[MAX_GPUS];
+    cudaEvent_t stop_events[MAX_GPUS];
+    cudaEvent_t compute_done[MAX_GPUS][2];
+    cudaEvent_t receive_ready[MAX_GPUS][2];
+    float* d_m[MAX_GPUS];
+    float* d_l[MAX_GPUS];
+    float* d_acc[MAX_GPUS];
+    float* d_k_ring[MAX_GPUS][2];
+    float* d_v_ring[MAX_GPUS][2];
+};
 
-void flash_attn_single_gpu_forward(
-    const float* d_q,
-    const float* d_k,
-    const float* d_v,
-    float* d_out,
-    const FlashAttnConfig* cfg,
-    cudaStream_t stream)
+static void validate_config(const FlashAttnConfig* cfg)
 {
-    int seq_len = cfg->seq_len;
-    int dim     = cfg->dim;
-
-    int num_q     = seq_len;
-    int chunk_len = seq_len;
-
-    float* d_m   = NULL;
-    float* d_l   = NULL;
-    float* d_acc = NULL;
-
-    size_t state_bytes = num_q * sizeof(float);
-    size_t acc_bytes   = (size_t)num_q * dim * sizeof(float);
-
-    CHECK_CUDA(cudaMalloc(&d_m,   state_bytes));
-    CHECK_CUDA(cudaMalloc(&d_l,   state_bytes));
-    CHECK_CUDA(cudaMalloc(&d_acc, acc_bytes));
-
-    // Initialize state
-    int block = 256;
-    int grid_state = (num_q * dim + block - 1) / block;
-    init_flash_state_kernel<<<grid_state, block, 0, stream>>>(
-        d_m, d_l, d_acc, num_q, dim);
-    CHECK_CUDA(cudaGetLastError());
-
-    float scale = 1.0f / sqrtf((float)dim);
-
-    dim3 grid_q(num_q);
-    int  block_q = 128;
-    size_t shared_bytes = (2 * dim + 2) * sizeof(float);
-
-    flash_attn_step_kernel<<<grid_q, block_q, shared_bytes, stream>>>(
-        d_q, d_k, d_v, d_acc, d_m, d_l,
-        num_q, chunk_len, dim, scale);
-    CHECK_CUDA(cudaGetLastError());
-
-    finalize_output_kernel<<<grid_q, block_q, 0, stream>>>(
-        d_acc, d_l, d_out, num_q, dim);
-    CHECK_CUDA(cudaGetLastError());
-
-    CHECK_CUDA(cudaFree(d_m));
-    CHECK_CUDA(cudaFree(d_l));
-    CHECK_CUDA(cudaFree(d_acc));
-}
-
-/******************************
- * Multi-GPU implementation   *
- ******************************/
-
-void flash_attn_multi_gpu_forward(
-    float** d_q,
-    float** d_k,
-    float** d_v,
-    float** d_out,
-    const FlashAttnConfig* cfg)
-{
-    int num_gpus = cfg->num_gpus;
-    int seq_len  = cfg->seq_len;
-    int dim      = cfg->dim;
-
-    if (num_gpus <= 0) {
-        fprintf(stderr, "flash_attn_multi_gpu_forward: num_gpus must be > 0\n");
+    if (cfg == NULL || cfg->seq_len <= 0 || cfg->dim <= 0
+        || cfg->num_gpus <= 0 || cfg->num_gpus > MAX_GPUS) {
+        fprintf(stderr, "Invalid FlashAttnConfig\n");
         exit(EXIT_FAILURE);
     }
-
+    if (cfg->seq_len % cfg->num_gpus != 0) {
+        fprintf(stderr, "Sequence length %d must be divisible by %d GPUs\n",
+                cfg->seq_len, cfg->num_gpus);
+        exit(EXIT_FAILURE);
+    }
     int device_count = 0;
     CHECK_CUDA(cudaGetDeviceCount(&device_count));
-    if (device_count < num_gpus) {
-        fprintf(stderr, "Requested %d GPUs but only %d available\n",
-                num_gpus, device_count);
+    if (device_count < cfg->num_gpus) {
+        fprintf(stderr, "Requested %d GPUs but only %d are available\n",
+                cfg->num_gpus, device_count);
         exit(EXIT_FAILURE);
     }
+}
 
-    if (seq_len % num_gpus != 0) {
-        fprintf(stderr, "Sequence length %d must be divisible by num_gpus %d\n",
-                seq_len, num_gpus);
-        exit(EXIT_FAILURE);
+FlashAttnWorkspace* flash_attn_workspace_create(const FlashAttnConfig* cfg)
+{
+    validate_config(cfg);
+    FlashAttnWorkspace* workspace = new FlashAttnWorkspace();
+    workspace->cfg = *cfg;
+    workspace->local_seq_len = cfg->seq_len / cfg->num_gpus;
+    workspace->state_bytes = (size_t)workspace->local_seq_len * sizeof(float);
+    workspace->chunk_bytes = (size_t)workspace->local_seq_len * cfg->dim * sizeof(float);
+    workspace->workspace_bytes_per_gpu = 2 * workspace->state_bytes
+        + workspace->chunk_bytes
+        + 4 * workspace->chunk_bytes;
+
+    int devices[MAX_GPUS];
+    for (int gpu = 0; gpu < cfg->num_gpus; ++gpu) {
+        devices[gpu] = gpu;
+    }
+    if (cfg->num_gpus > 1) {
+        CHECK_NCCL(ncclCommInitAll(workspace->comms, cfg->num_gpus, devices));
     }
 
-    int local_seq_len = seq_len / num_gpus;
-    int devs[8];
-    for (int i = 0; i < num_gpus; ++i) {
-        devs[i] = i;
+    for (int gpu = 0; gpu < cfg->num_gpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(gpu));
+        CHECK_CUDA(cudaStreamCreateWithFlags(&workspace->compute_streams[gpu], cudaStreamNonBlocking));
+        CHECK_CUDA(cudaStreamCreateWithFlags(
+            &workspace->communication_streams[gpu], cudaStreamNonBlocking));
+        CHECK_CUDA(cudaEventCreate(&workspace->start_events[gpu]));
+        CHECK_CUDA(cudaEventCreate(&workspace->stop_events[gpu]));
+        for (int slot = 0; slot < 2; ++slot) {
+            CHECK_CUDA(cudaEventCreateWithFlags(
+                &workspace->compute_done[gpu][slot], cudaEventDisableTiming));
+            CHECK_CUDA(cudaEventCreateWithFlags(
+                &workspace->receive_ready[gpu][slot], cudaEventDisableTiming));
+        }
+        size_t free_before = 0;
+        size_t total_before = 0;
+        CHECK_CUDA(cudaMemGetInfo(&free_before, &total_before));
+        CHECK_CUDA(cudaMalloc(&workspace->d_m[gpu], workspace->state_bytes));
+        CHECK_CUDA(cudaMalloc(&workspace->d_l[gpu], workspace->state_bytes));
+        CHECK_CUDA(cudaMalloc(&workspace->d_acc[gpu], workspace->chunk_bytes));
+        for (int slot = 0; slot < 2; ++slot) {
+            CHECK_CUDA(cudaMalloc(&workspace->d_k_ring[gpu][slot], workspace->chunk_bytes));
+            CHECK_CUDA(cudaMalloc(&workspace->d_v_ring[gpu][slot], workspace->chunk_bytes));
+        }
+        size_t free_after = 0;
+        size_t total_after = 0;
+        CHECK_CUDA(cudaMemGetInfo(&free_after, &total_after));
+        workspace->measured_delta_bytes[gpu] = free_before >= free_after
+            ? free_before - free_after : 0;
     }
+    return workspace;
+}
 
-    ncclComm_t comms[8];
-    CHECK_NCCL(ncclCommInitAll(comms, num_gpus, devs));
+void flash_attn_workspace_prepare_kv(
+    FlashAttnWorkspace* workspace,
+    float* const* d_k,
+    float* const* d_v)
+{
+    for (int gpu = 0; gpu < workspace->cfg.num_gpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(gpu));
+        CHECK_CUDA(cudaMemcpyAsync(
+            workspace->d_k_ring[gpu][0], d_k[gpu], workspace->chunk_bytes,
+            cudaMemcpyDeviceToDevice, workspace->communication_streams[gpu]));
+        CHECK_CUDA(cudaMemcpyAsync(
+            workspace->d_v_ring[gpu][0], d_v[gpu], workspace->chunk_bytes,
+            cudaMemcpyDeviceToDevice, workspace->communication_streams[gpu]));
+    }
+    for (int gpu = 0; gpu < workspace->cfg.num_gpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(gpu));
+        CHECK_CUDA(cudaStreamSynchronize(workspace->communication_streams[gpu]));
+    }
+}
 
-    cudaStream_t streams[8];
-    float* d_m[8]      = {0};
-    float* d_l[8]      = {0};
-    float* d_acc[8]    = {0};
-    float* d_k_buf[8]  = {0};
-    float* d_v_buf[8]  = {0};
-    float* cur_k[8]    = {0};
-    float* cur_v[8]    = {0};
+double flash_attn_workspace_forward(
+    FlashAttnWorkspace* workspace,
+    float* const* d_q,
+    float* const* d_out)
+{
+    const int gpu_count = workspace->cfg.num_gpus;
+    const int local_seq = workspace->local_seq_len;
+    const int dim = workspace->cfg.dim;
+    const size_t chunk_elements = (size_t)local_seq * dim;
+    const int state_threads = 256;
+    const int state_blocks = (local_seq * dim + state_threads - 1) / state_threads;
+    const int attention_threads = 128;
+    const size_t shared_bytes = (size_t)(2 * dim + 2) * sizeof(float);
+    const float scale = 1.0f / sqrtf((float)dim);
 
-    size_t state_bytes = local_seq_len * sizeof(float);
-    size_t chunk_elems = (size_t)local_seq_len * dim;
-    size_t chunk_bytes = chunk_elems * sizeof(float);
-
-    // Per-GPU initialization
-    for (int i = 0; i < num_gpus; ++i) {
-        CHECK_CUDA(cudaSetDevice(devs[i]));
-        CHECK_CUDA(cudaStreamCreate(&streams[i]));
-
-        CHECK_CUDA(cudaMalloc(&d_m[i], state_bytes));
-        CHECK_CUDA(cudaMalloc(&d_l[i], state_bytes));
-        CHECK_CUDA(cudaMalloc(&d_acc[i], chunk_bytes));
-        CHECK_CUDA(cudaMalloc(&d_k_buf[i], chunk_bytes));
-        CHECK_CUDA(cudaMalloc(&d_v_buf[i], chunk_bytes));
-
-        int block = 256;
-        int grid_state = (local_seq_len * dim + block - 1) / block;
-        init_flash_state_kernel<<<grid_state, block, 0, streams[i]>>>(
-            d_m[i], d_l[i], d_acc[i], local_seq_len, dim);
+    for (int gpu = 0; gpu < gpu_count; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(gpu));
+        CHECK_CUDA(cudaEventRecord(
+            workspace->start_events[gpu], workspace->compute_streams[gpu]));
+        CHECK_CUDA(cudaStreamWaitEvent(
+            workspace->communication_streams[gpu], workspace->start_events[gpu], 0));
+        init_flash_state_kernel<<<
+            state_blocks, state_threads, 0, workspace->compute_streams[gpu]>>>(
+                workspace->d_m[gpu], workspace->d_l[gpu], workspace->d_acc[gpu],
+                local_seq, dim);
         CHECK_CUDA(cudaGetLastError());
-
-        cur_k[i] = d_k[i];
-        cur_v[i] = d_v[i];
     }
 
-    float scale = 1.0f / sqrtf((float)dim);
-    dim3 grid_q(local_seq_len);
-    int  block_q = 128;
-    size_t shared_bytes = (2 * dim + 2) * sizeof(float);
+    for (int step = 0; step < gpu_count; ++step) {
+        const int current_slot = step % 2;
+        const int next_slot = 1 - current_slot;
 
-    // Ring over key/value shards
-    for (int step = 0; step < num_gpus; ++step) {
-        // Local compute
-        for (int i = 0; i < num_gpus; ++i) {
-            CHECK_CUDA(cudaSetDevice(devs[i]));
-            flash_attn_step_kernel<<<grid_q, block_q, shared_bytes, streams[i]>>>(
-                d_q[i], cur_k[i], cur_v[i],
-                d_acc[i], d_m[i], d_l[i],
-                local_seq_len, local_seq_len, dim, scale);
+        for (int gpu = 0; gpu < gpu_count; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(gpu));
+            if (step > 0) {
+                CHECK_CUDA(cudaStreamWaitEvent(
+                    workspace->compute_streams[gpu],
+                    workspace->receive_ready[gpu][current_slot], 0));
+            }
+            flash_attn_step_kernel<<<
+                local_seq, attention_threads, shared_bytes,
+                workspace->compute_streams[gpu]>>>(
+                    d_q[gpu], workspace->d_k_ring[gpu][current_slot],
+                    workspace->d_v_ring[gpu][current_slot], workspace->d_acc[gpu],
+                    workspace->d_m[gpu], workspace->d_l[gpu], local_seq, local_seq,
+                    dim, scale);
             CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaEventRecord(
+                workspace->compute_done[gpu][current_slot],
+                workspace->compute_streams[gpu]));
         }
 
-        if (step < num_gpus - 1) {
-            // Rotate K/V in a ring: i -> (i+1) mod N
-            CHECK_NCCL(ncclGroupStart());
-            for (int i = 0; i < num_gpus; ++i) {
-                int next = (i + 1) % num_gpus;
-                int prev = (i - 1 + num_gpus) % num_gpus;
+        if (step >= gpu_count - 1) {
+            continue;
+        }
 
-                CHECK_CUDA(cudaSetDevice(devs[i]));
-                CHECK_NCCL(ncclSend(cur_k[i], chunk_elems, ncclFloat,
-                                    next, comms[i], streams[i]));
-                CHECK_NCCL(ncclRecv(d_k_buf[i], chunk_elems, ncclFloat,
-                                    prev, comms[i], streams[i]));
-                CHECK_NCCL(ncclSend(cur_v[i], chunk_elems, ncclFloat,
-                                    next, comms[i], streams[i]));
-                CHECK_NCCL(ncclRecv(d_v_buf[i], chunk_elems, ncclFloat,
-                                    prev, comms[i], streams[i]));
+        if (!workspace->cfg.overlap_kv_rotation) {
+            for (int gpu = 0; gpu < gpu_count; ++gpu) {
+                CHECK_CUDA(cudaSetDevice(gpu));
+                CHECK_CUDA(cudaStreamWaitEvent(
+                    workspace->communication_streams[gpu],
+                    workspace->compute_done[gpu][current_slot], 0));
             }
-            CHECK_NCCL(ncclGroupEnd());
+        }
+        if (step >= 1) {
+            for (int gpu = 0; gpu < gpu_count; ++gpu) {
+                CHECK_CUDA(cudaSetDevice(gpu));
+                CHECK_CUDA(cudaStreamWaitEvent(
+                    workspace->communication_streams[gpu],
+                    workspace->compute_done[gpu][next_slot], 0));
+            }
+        }
 
-            // Swap buffers for next step
-            for (int i = 0; i < num_gpus; ++i) {
-                float* tmp_k = cur_k[i];
-                float* tmp_v = cur_v[i];
-                cur_k[i] = d_k_buf[i];
-                cur_v[i] = d_v_buf[i];
-                d_k_buf[i] = tmp_k;
-                d_v_buf[i] = tmp_v;
-            }
+        CHECK_NCCL(ncclGroupStart());
+        for (int gpu = 0; gpu < gpu_count; ++gpu) {
+            const int next_gpu = (gpu + 1) % gpu_count;
+            const int previous_gpu = (gpu - 1 + gpu_count) % gpu_count;
+            CHECK_CUDA(cudaSetDevice(gpu));
+            CHECK_NCCL(ncclSend(
+                workspace->d_k_ring[gpu][current_slot], chunk_elements, ncclFloat,
+                next_gpu, workspace->comms[gpu], workspace->communication_streams[gpu]));
+            CHECK_NCCL(ncclRecv(
+                workspace->d_k_ring[gpu][next_slot], chunk_elements, ncclFloat,
+                previous_gpu, workspace->comms[gpu], workspace->communication_streams[gpu]));
+            CHECK_NCCL(ncclSend(
+                workspace->d_v_ring[gpu][current_slot], chunk_elements, ncclFloat,
+                next_gpu, workspace->comms[gpu], workspace->communication_streams[gpu]));
+            CHECK_NCCL(ncclRecv(
+                workspace->d_v_ring[gpu][next_slot], chunk_elements, ncclFloat,
+                previous_gpu, workspace->comms[gpu], workspace->communication_streams[gpu]));
+        }
+        CHECK_NCCL(ncclGroupEnd());
+        for (int gpu = 0; gpu < gpu_count; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(gpu));
+            CHECK_CUDA(cudaEventRecord(
+                workspace->receive_ready[gpu][next_slot],
+                workspace->communication_streams[gpu]));
         }
     }
 
-    // Finalize outputs
-    for (int i = 0; i < num_gpus; ++i) {
-        CHECK_CUDA(cudaSetDevice(devs[i]));
-        finalize_output_kernel<<<grid_q, block_q, 0, streams[i]>>>(
-            d_acc[i], d_l[i], d_out[i],
-            local_seq_len, dim);
+    for (int gpu = 0; gpu < gpu_count; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(gpu));
+        finalize_output_kernel<<<
+            local_seq, attention_threads, 0, workspace->compute_streams[gpu]>>>(
+                workspace->d_acc[gpu], workspace->d_l[gpu], d_out[gpu],
+                local_seq, dim);
         CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaEventRecord(
+            workspace->stop_events[gpu], workspace->compute_streams[gpu]));
     }
 
-    // Sync & cleanup
-    for (int i = 0; i < num_gpus; ++i) {
-        CHECK_CUDA(cudaSetDevice(devs[i]));
-        CHECK_CUDA(cudaStreamSynchronize(streams[i]));
-        CHECK_CUDA(cudaFree(d_m[i]));
-        CHECK_CUDA(cudaFree(d_l[i]));
-        CHECK_CUDA(cudaFree(d_acc[i]));
-        CHECK_CUDA(cudaFree(d_k_buf[i]));
-        CHECK_CUDA(cudaFree(d_v_buf[i]));
-        CHECK_CUDA(cudaStreamDestroy(streams[i]));
-        CHECK_NCCL(ncclCommDestroy(comms[i]));
+    double max_elapsed_ms = 0.0;
+    for (int gpu = 0; gpu < gpu_count; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(gpu));
+        CHECK_CUDA(cudaEventSynchronize(workspace->stop_events[gpu]));
+        float elapsed_ms = 0.0f;
+        CHECK_CUDA(cudaEventElapsedTime(
+            &elapsed_ms, workspace->start_events[gpu], workspace->stop_events[gpu]));
+        if (elapsed_ms > max_elapsed_ms) {
+            max_elapsed_ms = elapsed_ms;
+        }
     }
+    return max_elapsed_ms;
+}
+
+void flash_attn_workspace_destroy(FlashAttnWorkspace* workspace)
+{
+    if (workspace == NULL) {
+        return;
+    }
+    for (int gpu = 0; gpu < workspace->cfg.num_gpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(gpu));
+        CHECK_CUDA(cudaFree(workspace->d_m[gpu]));
+        CHECK_CUDA(cudaFree(workspace->d_l[gpu]));
+        CHECK_CUDA(cudaFree(workspace->d_acc[gpu]));
+        for (int slot = 0; slot < 2; ++slot) {
+            CHECK_CUDA(cudaFree(workspace->d_k_ring[gpu][slot]));
+            CHECK_CUDA(cudaFree(workspace->d_v_ring[gpu][slot]));
+            CHECK_CUDA(cudaEventDestroy(workspace->compute_done[gpu][slot]));
+            CHECK_CUDA(cudaEventDestroy(workspace->receive_ready[gpu][slot]));
+        }
+        CHECK_CUDA(cudaEventDestroy(workspace->start_events[gpu]));
+        CHECK_CUDA(cudaEventDestroy(workspace->stop_events[gpu]));
+        CHECK_CUDA(cudaStreamDestroy(workspace->compute_streams[gpu]));
+        CHECK_CUDA(cudaStreamDestroy(workspace->communication_streams[gpu]));
+        if (workspace->cfg.num_gpus > 1) {
+            CHECK_NCCL(ncclCommDestroy(workspace->comms[gpu]));
+        }
+    }
+    delete workspace;
+}
+
+size_t flash_attn_workspace_bytes_per_gpu(const FlashAttnWorkspace* workspace)
+{
+    return workspace->workspace_bytes_per_gpu;
+}
+
+size_t flash_attn_workspace_measured_delta_bytes(
+    const FlashAttnWorkspace* workspace,
+    int gpu_index)
+{
+    if (gpu_index < 0 || gpu_index >= workspace->cfg.num_gpus) {
+        return 0;
+    }
+    return workspace->measured_delta_bytes[gpu_index];
+}
+
+size_t flash_attn_minimal_state_bytes_per_gpu(const FlashAttnConfig* cfg)
+{
+    const size_t local_seq = (size_t)cfg->seq_len / cfg->num_gpus;
+    const size_t state = 2 * local_seq * sizeof(float);
+    const size_t accumulator = local_seq * cfg->dim * sizeof(float);
+    const size_t current_kv_shard = 2 * local_seq * cfg->dim * sizeof(float);
+    return state + accumulator + current_kv_shard;
+}
+
+size_t flash_attn_full_score_matrix_bytes(const FlashAttnConfig* cfg)
+{
+    return (size_t)cfg->seq_len * cfg->seq_len * sizeof(float);
 }

@@ -3,8 +3,10 @@ cmake_minimum_required(VERSION 3.18)
 project(dist_flash_attn C CXX CUDA)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CUDA_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 find_package(CUDAToolkit REQUIRED)
 
@@ -32,3 +34,6 @@ target_link_libraries(dist_flash_attn PRIVATE
 # Reasonable default architectures, adjust for your cluster as needed.
 set_target_properties(dist_flash_attn PROPERTIES
     CUDA_ARCHITECTURES "70;75;80;86")
+
+target_compile_options(dist_flash_attn PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3;-lineinfo>)

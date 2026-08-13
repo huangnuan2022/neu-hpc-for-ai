@@ -46,13 +46,15 @@ This checklist separates implemented evidence from targets. Target values are no
 
 ## Phase 3: CUDA/NCCL Microbenchmark
 
-- [ ] Persistent/reused buffers and setup-free steady-state timing.
-- [ ] Warm-up, repeated samples, median/p95, and correct cross-device synchronization.
-- [ ] PyTorch SDPA correctness with maximum absolute and relative error.
-- [ ] 1/2/4-GPU sweeps for sequence length 1,024/2,048/4,096 and dimension 64.
-- [ ] Nsight Systems artifact collection.
-- [ ] Double-buffered K/V rotation experiment with honest overlap/bottleneck reporting.
-- [ ] Formula and test for the target 98.8% per-GPU working-state reduction at 4,096 tokens on four GPUs.
+- [x] Persistent/reused communicators, streams, events, and buffers with setup-free steady-state timing.
+- [x] Warm-up, repeated samples, median/p95, and maximum per-device CUDA-event duration.
+- [x] PyTorch SDPA fixture generation and full-output maximum absolute/relative error reporting.
+- [x] Automated 1/2/4-GPU sweep definition for sequence length 1,024/2,048/4,096 and dimension 64.
+- [x] Nsight Systems trace and stats collection script.
+- [x] Separate-stream, double-buffered K/V rotation and serialized comparison mode.
+- [x] Formula and CPU test for 98.8159% minimal-state and 98.0347% explicit double-buffer-workspace reductions at 4,096 tokens on four GPUs.
+- [ ] Compile and correctness validation on NVIDIA hardware.
+- [ ] Measured 1/2/4-GPU latency, scaling, allocation deltas, overlap benefit, and Nsight artifacts.
 
 ## Targets Pending Measurement
 

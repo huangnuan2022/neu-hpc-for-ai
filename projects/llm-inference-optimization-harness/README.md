@@ -138,7 +138,9 @@ These CPU timings are not GPU speedup claims.
 
 ## CUDA/NCCL Path
 
-The course implementation under `../../week_08/dist-flash-attn` already contains streaming-softmax and ring K/V rotation code. Its benchmark methodology still needs persistent buffers, setup-free repeated timing, cross-device synchronization, a PyTorch SDPA reference, and Nsight profiling before GPU performance claims are defensible.
+The custom microbenchmark under `../../week_08/dist-flash-attn` now implements persistent buffers and NCCL communicators, warm-up plus repeated median/p95 timing, maximum per-device CUDA-event duration, PyTorch SDPA fixtures, exact/observed memory accounting, an overlap-versus-serialized K/V experiment, and Nsight collection scripts.
+
+The methodology code is complete, but this laptop has no CUDA toolkit or NVIDIA GPU. CUDA compilation, correctness, speedup, allocation, overlap, and profiling claims remain pending real hardware.
 
 The full limitation audit and phase status live in `docs/implementation_checklist.md`.
 
@@ -157,4 +159,4 @@ The following are conservative goals for the upcoming AWS run, not achieved clai
 - 2.0x throughput over sequential serving.
 - Less than $10 per million output tokens.
 - 2.0x four-GPU custom-attention speedup at sequence length 4,096.
-- 98.8% lower estimated per-GPU attention working state versus a full 4,096 x 4,096 FP32 score matrix, pending formula validation and measured allocation reporting.
+- 98.8% lower formula-validated minimal per-GPU attention state versus a full 4,096 x 4,096 FP32 score matrix; the double-buffer implementation is 98.0% lower by explicit workspace bytes, with CUDA allocation deltas pending GPU measurement.

@@ -230,12 +230,33 @@ if [ "$GPU_COUNT" -gt 0 ]; then
   cmake .. | tee "$RESULTS_DIR/flashattn-cmake.log"
   make -j"$(nproc)" | tee "$RESULTS_DIR/flashattn-build.log"
 
-  ./dist_flash_attn --seq 1024 --dim 64 --gpus 1 | tee "$RESULTS_DIR/flashattn-1gpu-seq1024.txt"
-  ./dist_flash_attn --seq 2048 --dim 64 --gpus 1 | tee "$RESULTS_DIR/flashattn-1gpu-seq2048.txt"
+  cd "$HOME/neu-hpc-for-ai/week_08/dist-flash-attn"
+  python3 scripts/generate_sdpa_fixture.py \
+    --output-dir "$RESULTS_DIR/sdpa-seq128" --seq 128 --dim 64
 
-  if [ "$GPU_COUNT" -ge 2 ]; then
-    ./dist_flash_attn --seq 2048 --dim 64 --gpus "$GPU_COUNT" | tee "$RESULTS_DIR/flashattn-${{GPU_COUNT}}gpu-seq2048.txt"
-    ./dist_flash_attn --seq 4096 --dim 64 --gpus "$GPU_COUNT" | tee "$RESULTS_DIR/flashattn-${{GPU_COUNT}}gpu-seq4096.txt"
+  if [ "$GPU_COUNT" -ge 4 ]; then
+    BENCHMARK_GPU_COUNT=4
+  elif [ "$GPU_COUNT" -ge 2 ]; then
+    BENCHMARK_GPU_COUNT=2
+  else
+    BENCHMARK_GPU_COUNT=1
+  fi
+
+  python3 scripts/run_gpu_sweep.py \
+    --binary "$HOME/neu-hpc-for-ai/week_08/dist-flash-attn/build/dist_flash_attn" \
+    --max-gpus "$BENCHMARK_GPU_COUNT" \
+    --correctness-case "$RESULTS_DIR/sdpa-seq128" \
+    --output-dir "$RESULTS_DIR/cuda-attention" \
+    | tee "$RESULTS_DIR/cuda-attention-sweep.log"
+
+  if command -v nsys >/dev/null 2>&1; then
+    bash scripts/profile_nsight.sh \
+      "$HOME/neu-hpc-for-ai/week_08/dist-flash-attn/build/dist_flash_attn" \
+      "$RESULTS_DIR/nsight/attention-seq4096-${{BENCHMARK_GPU_COUNT}}gpu" \
+      "$BENCHMARK_GPU_COUNT" \
+      | tee "$RESULTS_DIR/nsight-profile.log"
+  else
+    echo "nsys not found; no Nsight trace collected" | tee "$RESULTS_DIR/nsight-profile.log"
   fi
 fi
 

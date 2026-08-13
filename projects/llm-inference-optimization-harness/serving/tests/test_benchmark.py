@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 
 from llm_serving_system.benchmark_environment import parse_vllm_metrics
+from llm_serving_system.attention_memory import attention_memory
 from llm_serving_system.benchmark_metrics import add_sequential_comparisons, percentile, summarize_scenario
 from llm_serving_system.benchmark_report import validate_artifact, write_artifacts
 from llm_serving_system.fake_backend import create_app as create_fake_app
@@ -153,3 +154,12 @@ def test_report_schema_and_three_artifact_formats(tmp_path: Path) -> None:
     assert set(paths) == {"json", "csv", "markdown"}
     assert all(path.exists() for path in paths.values())
     assert "not performance evidence" in paths["markdown"].read_text(encoding="utf-8")
+
+
+def test_4096_four_gpu_attention_memory_formula() -> None:
+    memory = attention_memory(seq=4096, dim=64, gpus=4)
+    assert memory["full_score_matrix_bytes"] == 67_108_864
+    assert memory["minimal_ring_state_bytes_per_gpu"] == 794_624
+    assert memory["explicit_double_buffer_workspace_bytes_per_gpu"] == 1_318_912
+    assert abs(memory["minimal_state_reduction_pct"] - 98.81591796875) < 1e-12
+    assert abs(memory["explicit_workspace_reduction_pct"] - 98.03466796875) < 1e-12
