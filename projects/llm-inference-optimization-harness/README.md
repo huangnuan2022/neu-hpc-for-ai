@@ -52,6 +52,18 @@ The same fake deployment can run in Docker:
 docker compose -f compose.fake.yaml up --build
 ```
 
+Run the complete local validation matrix in another terminal:
+
+```bash
+.venv/bin/python -m llm_serving_system.load_benchmark \
+  --deployment local-fake-validation \
+  --worker-count 4 \
+  --backend-kind fake \
+  --tokenizer whitespace
+```
+
+This sends the default 512-input/128-output workload at concurrency `1/8/16/32`, with one warm-up and five measured runs per concurrency. The fake backend intentionally caps generated test tokens; its report validates parsing and orchestration only and is always marked invalid for performance claims.
+
 ## Four-GPU vLLM Configuration
 
 `compose.vllm.yaml` assigns one vLLM process to each GPU and points the gateway at all four workers:
@@ -60,7 +72,14 @@ docker compose -f compose.fake.yaml up --build
 docker compose -f compose.vllm.yaml up
 ```
 
-Before a measured run, pin `VLLM_IMAGE` to the exact tested image tag or digest. The default configuration serves only `Qwen/Qwen3-8B`, uses BF16, and caps model context at 4,096 tokens. It is intended for a `g5.12xlarge` or equivalent four-GPU host, not this CPU-only laptop.
+Use `compose.vllm.single.yaml` for the single-GPU deployment. Before either measured run, set `VLLM_IMAGE` to a versioned tag or digest:
+
+```bash
+export VLLM_IMAGE='vllm/vllm-openai:<tested-version>'
+docker compose -f compose.vllm.single.yaml up
+```
+
+The configuration serves only `Qwen/Qwen3-8B`, uses BF16, enables prefix caching, and caps model context at 4,096 tokens. The four-worker file is intended for a `g5.12xlarge` or equivalent four-GPU host, not this CPU-only laptop.
 
 Gateway behavior is configured through environment variables:
 
@@ -73,6 +92,22 @@ Gateway behavior is configured through environment variables:
 | `SERVING_FAILOVER_ATTEMPTS` | `2` | Maximum pre-token worker attempts |
 | `SERVING_AFFINITY_LOAD_SLACK` | `2` | Allowed queue-depth difference before overriding affinity |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Optional OTLP/HTTP trace collector |
+
+Run a real serving benchmark after the deployment is healthy:
+
+```bash
+python3 -m pip install -e '.[benchmark]'
+llm-serving-benchmark \
+  --deployment aws-a10g-1gpu \
+  --worker-count 1 \
+  --backend-kind vllm \
+  --tokenizer huggingface \
+  --hourly-cost-usd '<current-instance-hourly-price>' \
+  --vllm-image "$VLLM_IMAGE" \
+  --backend-metrics-url http://127.0.0.1:8101/metrics
+```
+
+For four workers, pass `--worker-count 4` and all four metrics URLs on ports `8101` through `8104`. The harness writes request-level CSV plus JSON and Markdown summaries under `serving-results/`. Real evidence is accepted only when the Qwen tokenizer, local GPU metadata, a pinned vLLM image, and fully successful measured runs are present.
 
 ## Tests
 

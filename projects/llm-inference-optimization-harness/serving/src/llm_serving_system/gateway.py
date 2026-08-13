@@ -353,6 +353,7 @@ def create_app(
                     headers={
                         "x-llm-backend": selection.backend.backend_id,
                         "x-llm-route-reason": selection.reason,
+                        "x-llm-backend-outstanding": str(selection.outstanding),
                     },
                 )
             except NoHealthyBackend as exc:
@@ -390,6 +391,7 @@ def create_app(
             headers={
                 "x-llm-backend": selection.backend.backend_id,
                 "x-llm-route-reason": selection.reason,
+                "x-llm-backend-outstanding": str(selection.outstanding),
                 "cache-control": "no-cache",
             },
         )

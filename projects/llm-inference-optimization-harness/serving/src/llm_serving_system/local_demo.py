@@ -62,7 +62,7 @@ def main() -> None:
         app = create_app(Settings.from_env())
         print(f"Gateway: http://{args.host}:{args.port}")
         print("Fake backends: " + ", ".join(endpoints))
-        uvicorn.run(app, host=args.host, port=args.port)
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     finally:
         for worker in workers:
             if worker.poll() is None:

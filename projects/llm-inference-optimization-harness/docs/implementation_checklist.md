@@ -36,10 +36,13 @@ This checklist separates implemented evidence from targets. Target values are no
 
 ## Phase 2: Serving Benchmark Harness
 
-- [ ] Async load generator with 512-token input, 128-token output, and concurrency 1/8/16/32.
-- [ ] Warm-up plus at least five measured runs per configuration.
-- [ ] TTFT, TPOT, E2E, output tokens/s, requests/s, p50/p95/p99, error, timeout, queue, route, GPU, and cost metrics.
-- [ ] JSON, CSV, and Markdown artifacts with complete environment metadata.
+- [x] Async load generator with exact 512-token input IDs, 128-token output requests, and concurrency 1/8/16/32.
+- [x] Warm-up plus at least five measured runs per configuration.
+- [x] TTFT, TPOT, E2E, output tokens/s, requests/s, p50/p95/p99, error, timeout, queue, route, GPU, and cost metrics.
+- [x] vLLM KV-cache, prefix-cache, running-request, and waiting-request metric sampling when exposed by workers.
+- [x] JSON, CSV, and Markdown artifacts with configuration, git SHA, AMI, driver, CUDA, GPU, and pinned-image metadata.
+- [x] Schema validation and request-level CSV evidence; fake-backend artifacts are explicitly invalid for performance claims.
+- [ ] Measured single- and four-GPU Qwen3-8B artifacts (blocked on AWS quota).
 
 ## Phase 3: CUDA/NCCL Microbenchmark
 

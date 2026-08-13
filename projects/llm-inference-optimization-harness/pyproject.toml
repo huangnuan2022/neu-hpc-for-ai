@@ -19,6 +19,9 @@ dependencies = [
 test = [
   "pytest>=8.4,<10",
 ]
+benchmark = [
+  "transformers>=4.55,<6",
+]
 telemetry = [
   "opentelemetry-exporter-otlp-proto-http>=1.36,<2",
   "opentelemetry-sdk>=1.36,<2",
@@ -28,6 +31,7 @@ telemetry = [
 llm-serving-gateway = "llm_serving_system.gateway:main"
 llm-serving-fake-backend = "llm_serving_system.fake_backend:main"
 llm-serving-demo = "llm_serving_system.local_demo:main"
+llm-serving-benchmark = "llm_serving_system.load_benchmark:main"
 
 [tool.setuptools]
 package-dir = {"" = "serving/src"}

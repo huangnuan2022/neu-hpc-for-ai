@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.gateway
     environment:
-      SERVING_BACKEND_ENDPOINTS: http://worker-0:8000,http://worker-1:8000,http://worker-2:8000,http://worker-3:8000
+      SERVING_BACKEND_ENDPOINTS: http://worker-0:8000
       SERVING_MODEL: Qwen/Qwen3-8B
       SERVING_MAX_IN_FLIGHT: "64"
       SERVING_REQUEST_TIMEOUT_SECONDS: "180"
@@ -13,11 +13,8 @@ services:
       - "8000:8000"
     depends_on:
       - worker-0
-      - worker-1
-      - worker-2
-      - worker-3
 
-  worker-0: &vllm-worker
+  worker-0:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
     command:
       - --model
@@ -43,42 +40,6 @@ services:
           devices:
             - driver: nvidia
               device_ids: ["0"]
-              capabilities: [gpu]
-
-  worker-1:
-    <<: *vllm-worker
-    ports:
-      - "8102:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["1"]
-              capabilities: [gpu]
-
-  worker-2:
-    <<: *vllm-worker
-    ports:
-      - "8103:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["2"]
-              capabilities: [gpu]
-
-  worker-3:
-    <<: *vllm-worker
-    ports:
-      - "8104:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["3"]
               capabilities: [gpu]
 
 volumes:

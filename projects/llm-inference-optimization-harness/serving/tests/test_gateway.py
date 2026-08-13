@@ -62,6 +62,7 @@ def test_streaming_request_exposes_route_and_metrics() -> None:
     assert first.status_code == 200
     assert first.headers["x-llm-backend"] == second.headers["x-llm-backend"]
     assert first.headers["x-llm-route-reason"] == "prefix_affinity"
+    assert int(first.headers["x-llm-backend-outstanding"]) >= 1
     assert "fake-token" in first.text
     assert "llm_gateway_ttft_seconds_count" in metrics.text
     assert "llm_gateway_route_decisions_total" in metrics.text
