@@ -325,7 +325,7 @@ int main(int argc, char** argv)
                 ring_workspace, gpu);
         }
 
-        std::cout << std::fixed << std::setprecision(6)
+        std::cout << std::setprecision(9)
                   << "{\"schema_version\":\"1.0\""
                   << ",\"seq\":" << options.seq
                   << ",\"dim\":" << options.dim
