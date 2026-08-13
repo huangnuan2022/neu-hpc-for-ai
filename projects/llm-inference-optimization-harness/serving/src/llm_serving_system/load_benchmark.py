@@ -515,7 +515,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--prefix-groups", type=int, default=4)
     command.add_argument("--warmup-runs", type=int, default=1)
     command.add_argument("--measured-runs", type=int, default=5)
-    command.add_argument("--requests-per-concurrency", type=int, default=2)
+    command.add_argument("--requests-per-concurrency", type=int, default=1)
     command.add_argument("--timeout-seconds", type=float, default=180.0)
     command.add_argument("--hourly-cost-usd", type=float, default=None)
     command.add_argument("--backend-metrics-url", action="append", default=[])

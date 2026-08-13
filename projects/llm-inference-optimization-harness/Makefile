@@ -34,6 +34,8 @@ serving-setup: $(SERVING_STAMP)
 
 serving-test: $(SERVING_STAMP)
 	$(PYTEST)
+	$(VENV)/bin/llm-serving-benchmark --help >/dev/null
+	$(VENV)/bin/llm-serving-regression-check --help >/dev/null
 
 serving-demo: $(SERVING_STAMP)
 	$(VENV)/bin/llm-serving-demo

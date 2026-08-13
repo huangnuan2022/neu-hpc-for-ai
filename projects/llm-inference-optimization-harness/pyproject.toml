@@ -32,6 +32,7 @@ llm-serving-gateway = "llm_serving_system.gateway:main"
 llm-serving-fake-backend = "llm_serving_system.fake_backend:main"
 llm-serving-demo = "llm_serving_system.local_demo:main"
 llm-serving-benchmark = "llm_serving_system.load_benchmark:main"
+llm-serving-regression-check = "llm_serving_system.regression_gate:main"
 
 [tool.setuptools]
 package-dir = {"" = "serving/src"}
