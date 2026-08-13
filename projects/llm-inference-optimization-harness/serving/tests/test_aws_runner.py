@@ -23,6 +23,10 @@ def test_generated_remote_script_is_valid_bash_and_archives_on_exit() -> None:
     assert result.returncode == 0, result.stderr
     assert 'RESULTS_DIR="$HOME/aws-benchmark-results"' in script
     assert "trap finalize EXIT" in script
+    assert "source /opt/pytorch/bin/activate" in script
+    assert "apt-get install -y cuda-toolkit libnccl2 libnccl-dev" in script
+    assert '-DCMAKE_CUDA_COMPILER="$NVCC_PATH"' in script
+    assert "-DCMAKE_CUDA_ARCHITECTURES=86" in script
     assert "docker compose version" in script
     assert "llm-serving-benchmark" in script
     assert "run_gpu_sweep.py" in script

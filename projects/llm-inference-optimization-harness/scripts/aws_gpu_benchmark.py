@@ -278,11 +278,42 @@ if [ "$WORKLOAD" = "kernel" ] || [ "$WORKLOAD" = "all" ]; then
     echo "No GPU is available for the kernel workload" >&2
     exit 1
   fi
+  if [ -f /opt/pytorch/bin/activate ]; then
+    # PyTorch 2.9+ DLAMIs keep CUDA and related libraries in this environment.
+    source /opt/pytorch/bin/activate
+  fi
+  NVCC_PATH="$(find /opt/pytorch/cuda /usr/local -maxdepth 4 -type f -name nvcc 2>/dev/null | sort -V | tail -n 1)"
+  if [ -z "$NVCC_PATH" ]; then
+    echo "CUDA compiler unavailable in the DLAMI environment; installing development toolkit"
+    sudo apt-get install -y cuda-toolkit libnccl2 libnccl-dev
+    NVCC_PATH="$(find /usr/local -maxdepth 4 -type f -name nvcc 2>/dev/null | sort -V | tail -n 1)"
+  fi
+  if [ -z "$NVCC_PATH" ]; then
+    echo "nvcc is still unavailable after CUDA environment setup" >&2
+    exit 1
+  fi
+  export CUDAToolkit_ROOT="$(dirname "$(dirname "$NVCC_PATH")")"
+  NCCL_HEADER="$(find "$CUDAToolkit_ROOT" /usr -maxdepth 4 -type f -name nccl.h 2>/dev/null | head -n 1)"
+  if [ -z "$NCCL_HEADER" ]; then
+    sudo apt-get install -y libnccl2 libnccl-dev
+  fi
+  export PATH="$(dirname "$NVCC_PATH"):$PATH"
+  export LD_LIBRARY_PATH="$CUDAToolkit_ROOT/lib:$CUDAToolkit_ROOT/lib64:${{LD_LIBRARY_PATH:-}}"
+  nvcc --version | tee "$RESULTS_DIR/nvcc-version.txt"
+  python3 -c 'import torch; print(torch.__version__, torch.version.cuda)' \
+    | tee "$RESULTS_DIR/pytorch-version.txt"
+  find "$CUDAToolkit_ROOT" /usr -maxdepth 4 \\( -name nccl.h -o -name 'libnccl.so*' \\) \
+    2>/dev/null | sort | tee "$RESULTS_DIR/nccl-files.txt"
+
   cd "$HOME/neu-hpc-for-ai/week_08/dist-flash-attn"
   rm -rf build
   mkdir -p build
   cd build
-  cmake .. | tee "$RESULTS_DIR/flashattn-cmake.log"
+  cmake \
+    -DCUDAToolkit_ROOT="$CUDAToolkit_ROOT" \
+    -DCMAKE_CUDA_COMPILER="$NVCC_PATH" \
+    -DCMAKE_CUDA_ARCHITECTURES=86 \
+    .. | tee "$RESULTS_DIR/flashattn-cmake.log"
   make -j"$(nproc)" | tee "$RESULTS_DIR/flashattn-build.log"
 
   cd "$HOME/neu-hpc-for-ai/week_08/dist-flash-attn"

@@ -10,14 +10,26 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 find_package(CUDAToolkit REQUIRED)
 
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86")
+endif()
+
 # Try to find NCCL; fall back to -lnccl if not found.
+find_path(NCCL_INCLUDE_DIR
+    NAMES nccl.h
+    HINTS ${CUDAToolkit_ROOT}/include /usr/include /usr/local/include)
+
 find_library(NCCL_LIBRARY
     NAMES nccl
-    HINTS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu)
+    HINTS
+        ${CUDAToolkit_ROOT}/lib
+        ${CUDAToolkit_ROOT}/lib64
+        /usr/lib
+        /usr/local/lib
+        /usr/lib/x86_64-linux-gnu)
 
-if (NOT NCCL_LIBRARY)
-    message(WARNING "NCCL library not found via find_library, assuming -lnccl is available on the link path")
-    set(NCCL_LIBRARY nccl)
+if (NOT NCCL_INCLUDE_DIR OR NOT NCCL_LIBRARY)
+    message(FATAL_ERROR "NCCL development headers and library are required")
 endif()
 
 add_executable(dist_flash_attn
@@ -25,15 +37,15 @@ add_executable(dist_flash_attn
     src/flash_attn.cu)
 
 target_include_directories(dist_flash_attn PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${NCCL_INCLUDE_DIR})
 
 target_link_libraries(dist_flash_attn PRIVATE
     CUDA::cudart
     ${NCCL_LIBRARY})
 
-# Reasonable default architectures, adjust for your cluster as needed.
 set_target_properties(dist_flash_attn PROPERTIES
-    CUDA_ARCHITECTURES "70;75;80;86")
+    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 
 target_compile_options(dist_flash_attn PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O3;-lineinfo>)
