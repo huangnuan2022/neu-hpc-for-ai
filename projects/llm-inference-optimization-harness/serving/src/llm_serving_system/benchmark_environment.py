@@ -19,6 +19,18 @@ def _command_output(command: list[str]) -> str | None:
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        if command and command[0] == "docker":
+            try:
+                result = subprocess.run(
+                    ["sudo", "-n", *command],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                return None
+            return result.stdout.strip() or result.stderr.strip() or None
         return None
     return result.stdout.strip() or result.stderr.strip() or None
 

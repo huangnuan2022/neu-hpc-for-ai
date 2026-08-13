@@ -30,6 +30,16 @@ ON_DEMAND_US_EAST_1 = {
     "g5.12xlarge": 5.672,
 }
 
+INSTANCE_VCPUS = {
+    "g4dn.xlarge": 4,
+    "g5.xlarge": 4,
+    "g4dn.12xlarge": 48,
+    "g5.12xlarge": 48,
+}
+
+G_VT_QUOTA_CODE = "L-DB2E81BA"
+DEFAULT_VLLM_IMAGE = "vllm/vllm-openai:v0.26.0-cu129-ubuntu2404"
+
 
 def run(cmd: list[str], *, check: bool = True, input_text: Optional[str] = None) -> subprocess.CompletedProcess[str]:
     print("+", " ".join(shlex.quote(part) for part in cmd))
@@ -161,41 +171,82 @@ def create_security_group(name: str, region: str) -> str:
         region=region,
     )
     group_id = proc.stdout.strip()
-    cidr = f"{public_ip()}/32"
-    aws(
-        [
-            "ec2",
-            "authorize-security-group-ingress",
-            "--group-id",
-            group_id,
-            "--protocol",
-            "tcp",
-            "--port",
-            "22",
-            "--cidr",
-            cidr,
-        ],
-        region=region,
-    )
+    try:
+        cidr = f"{public_ip()}/32"
+        aws(
+            [
+                "ec2",
+                "authorize-security-group-ingress",
+                "--group-id",
+                group_id,
+                "--protocol",
+                "tcp",
+                "--port",
+                "22",
+                "--cidr",
+                cidr,
+            ],
+            region=region,
+        )
+    except Exception:
+        aws(
+            ["ec2", "delete-security-group", "--group-id", group_id],
+            region=region,
+            check=False,
+        )
+        raise
     return group_id
 
 
-def remote_script(max_runtime_minutes: int) -> str:
+def ttl_user_data(max_runtime_minutes: int) -> str:
     ttl = max(10, int(max_runtime_minutes))
+    return f"""#!/usr/bin/env bash
+shutdown -h +{ttl} "LLM serving benchmark TTL reached" || true
+"""
+
+
+def remote_script(
+    workload: str,
+    serving_workers: int,
+    vllm_image: str,
+    instance_hourly_cost: float,
+) -> str:
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
 RESULTS_DIR="$HOME/aws-benchmark-results"
 mkdir -p "$RESULTS_DIR"
 exec > >(tee "$RESULTS_DIR/remote-run.log") 2>&1
+WORKLOAD={shlex.quote(workload)}
+SERVING_WORKERS={serving_workers}
+VLLM_IMAGE={shlex.quote(vllm_image)}
+INSTANCE_HOURLY_COST={instance_hourly_cost:.6f}
+COMPOSE_FILE=""
+
+finalize() {{
+  status=$?
+  trap - EXIT
+  if [ -n "$COMPOSE_FILE" ]; then
+    cd "$HOME/neu-hpc-for-ai/{PROJECT_PATH}" || true
+    sudo env VLLM_IMAGE="$VLLM_IMAGE" docker compose -f "$COMPOSE_FILE" logs \
+      > "$RESULTS_DIR/vllm-compose.log" 2>&1 || true
+    sudo env VLLM_IMAGE="$VLLM_IMAGE" docker compose -f "$COMPOSE_FILE" down -v \
+      >> "$RESULTS_DIR/vllm-compose.log" 2>&1 || true
+  fi
+  cd "$HOME"
+  tar -czf "$HOME/aws-benchmark-results.tgz" aws-benchmark-results || true
+  exit "$status"
+}}
+trap finalize EXIT
 
 echo "Started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "Scheduling safety shutdown in {ttl} minutes"
-sudo shutdown -h +{ttl} "LLM inference benchmark TTL reached" || true
+echo "Workload: $WORKLOAD"
+echo "Serving workers: $SERVING_WORKERS"
+echo "vLLM image: $VLLM_IMAGE"
 
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update -y
-  sudo apt-get install -y build-essential cmake git make python3
+  sudo apt-get install -y build-essential cmake curl git make python3 python3-venv
 fi
 
 cd "$HOME"
@@ -203,6 +254,7 @@ rm -rf neu-hpc-for-ai
 git clone {shlex.quote(REPO_URL)}
 cd neu-hpc-for-ai
 git rev-parse HEAD | tee "$RESULTS_DIR/git-head.txt"
+git status --porcelain | tee "$RESULTS_DIR/git-status-before-run.txt"
 
 echo "=== Host ===" | tee "$RESULTS_DIR/host.txt"
 uname -a | tee -a "$RESULTS_DIR/host.txt"
@@ -219,10 +271,13 @@ echo "$GPU_COUNT" | tee "$RESULTS_DIR/gpu-count.txt"
 cd "$HOME/neu-hpc-for-ai/{PROJECT_PATH}"
 make clean
 make test
-make bench
 cp -R results "$RESULTS_DIR/cpu-harness-results"
 
-if [ "$GPU_COUNT" -gt 0 ]; then
+if [ "$WORKLOAD" = "kernel" ] || [ "$WORKLOAD" = "all" ]; then
+  if [ "$GPU_COUNT" -le 0 ]; then
+    echo "No GPU is available for the kernel workload" >&2
+    exit 1
+  fi
   cd "$HOME/neu-hpc-for-ai/week_08/dist-flash-attn"
   rm -rf build
   mkdir -p build
@@ -260,8 +315,62 @@ if [ "$GPU_COUNT" -gt 0 ]; then
   fi
 fi
 
-cd "$HOME"
-tar -czf "$HOME/aws-benchmark-results.tgz" aws-benchmark-results
+if [ "$WORKLOAD" = "serving" ] || [ "$WORKLOAD" = "all" ]; then
+  if [ "$GPU_COUNT" -lt "$SERVING_WORKERS" ]; then
+    echo "Serving requested $SERVING_WORKERS workers but found $GPU_COUNT GPUs" >&2
+    exit 1
+  fi
+  command -v docker >/dev/null 2>&1 || {{ echo "docker is required" >&2; exit 1; }}
+  sudo systemctl start docker || true
+  if ! sudo docker compose version > "$RESULTS_DIR/docker-compose-version.txt" 2>&1; then
+    sudo apt-get install -y docker-compose-v2 || sudo apt-get install -y docker-compose-plugin
+    sudo docker compose version > "$RESULTS_DIR/docker-compose-version.txt"
+  fi
+  cd "$HOME/neu-hpc-for-ai/{PROJECT_PATH}"
+  if [ "$SERVING_WORKERS" -eq 4 ]; then
+    COMPOSE_FILE="compose.vllm.yaml"
+  else
+    COMPOSE_FILE="compose.vllm.single.yaml"
+  fi
+
+  sudo docker pull "$VLLM_IMAGE"
+  sudo docker image inspect "$VLLM_IMAGE" > "$RESULTS_DIR/vllm-image-inspect.json"
+  sudo env VLLM_IMAGE="$VLLM_IMAGE" docker compose -f "$COMPOSE_FILE" up -d
+
+  ready=0
+  for _ in $(seq 1 180); do
+    if curl --fail --silent http://127.0.0.1:8000/health > "$RESULTS_DIR/serving-health.json"; then
+      ready=1
+      break
+    fi
+    sleep 10
+  done
+  if [ "$ready" -ne 1 ]; then
+    echo "Qwen3-8B serving deployment did not become ready within 30 minutes" >&2
+    exit 1
+  fi
+
+  python3 -m venv "$HOME/llm-serving-benchmark-venv"
+  "$HOME/llm-serving-benchmark-venv/bin/python" -m pip install --upgrade pip
+  "$HOME/llm-serving-benchmark-venv/bin/python" -m pip install -e '.[benchmark]'
+
+  METRIC_ARGS=()
+  for worker in $(seq 1 "$SERVING_WORKERS"); do
+    port=$((8100 + worker))
+    METRIC_ARGS+=(--backend-metrics-url "http://127.0.0.1:${{port}}/metrics")
+  done
+
+  "$HOME/llm-serving-benchmark-venv/bin/llm-serving-benchmark" \
+    --deployment "aws-a10g-${{SERVING_WORKERS}}gpu" \
+    --worker-count "$SERVING_WORKERS" \
+    --backend-kind vllm \
+    --tokenizer huggingface \
+    --hourly-cost-usd "$INSTANCE_HOURLY_COST" \
+    --vllm-image "$VLLM_IMAGE" \
+    --output-dir "$RESULTS_DIR/serving" \
+    "${{METRIC_ARGS[@]}}"
+fi
+
 echo "Finished at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 """
 
@@ -277,6 +386,10 @@ def ssh_base_args(key_path: Path) -> list[str]:
         "UserKnownHostsFile=/dev/null",
         "-o",
         "ConnectTimeout=10",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
     ]
 
 
@@ -310,12 +423,72 @@ def scp_from_instance(public_dns: str, user: str, key_path: Path, remote_path: s
     )
 
 
+def quota_value(region: str) -> float:
+    proc = aws(
+        [
+            "service-quotas",
+            "get-service-quota",
+            "--service-code",
+            "ec2",
+            "--quota-code",
+            G_VT_QUOTA_CODE,
+            "--query",
+            "Quota.Value",
+            "--output",
+            "text",
+        ],
+        region=region,
+    )
+    return float(proc.stdout.strip())
+
+
+def launch_cost_summary(args: argparse.Namespace) -> tuple[float, int]:
+    if args.region != DEFAULT_REGION:
+        raise SystemExit("The built-in launch cost guard currently supports only us-east-1.")
+    price = ON_DEMAND_US_EAST_1.get(args.instance_type)
+    required_vcpus = INSTANCE_VCPUS.get(args.instance_type)
+    if price is None or required_vcpus is None:
+        raise SystemExit(f"No reviewed price/quota mapping for {args.instance_type}")
+    current_quota = quota_value(args.region)
+    hours = args.max_runtime_minutes / 60.0
+    estimated_max = price * hours + 0.005 * hours
+    estimated_max += 0.08 * args.volume_gb * (args.max_runtime_minutes / (60.0 * 24.0 * 30.0))
+    print("=== AWS launch guard ===")
+    print(f"Workload: {args.workload}")
+    print(f"Instance: {args.instance_type} ({required_vcpus} vCPUs)")
+    print(f"G/VT quota: {current_quota:.0f} vCPUs")
+    print(f"Serving workers: {args.serving_workers}")
+    print(f"TTL: {args.max_runtime_minutes} minutes")
+    print(f"Reviewed instance price: about ${price:.3f}/hour in us-east-1")
+    print(f"Estimated maximum run cost: ${estimated_max:.2f}")
+    if args.workload in {"serving", "all"}:
+        print(f"Pinned vLLM image: {args.vllm_image}")
+    if current_quota < required_vcpus:
+        raise SystemExit(
+            f"Insufficient G/VT quota: need {required_vcpus}, current value is {current_quota:.0f}. "
+            "No AWS resources were created."
+        )
+    return price, required_vcpus
+
+
 def launch_run(args: argparse.Namespace) -> None:
     if args.confirm_cost != "YES":
         raise SystemExit("Refusing to launch AWS resources without --confirm-cost YES")
     require_tool("aws")
     require_tool("ssh")
     require_tool("scp")
+
+    if args.workload in {"serving", "all"}:
+        if not args.vllm_image or args.vllm_image.endswith(":latest"):
+            raise SystemExit("Serving runs require a pinned --vllm-image tag or digest")
+        expected_workers = 4 if args.instance_type.endswith("12xlarge") else 1
+        if args.serving_workers != expected_workers:
+            raise SystemExit(
+                f"{args.instance_type} must use --serving-workers {expected_workers} in this runner"
+            )
+    if not 10 <= args.max_runtime_minutes <= 60:
+        raise SystemExit("--max-runtime-minutes must be between 10 and 60")
+    instance_hourly_cost, _ = launch_cost_summary(args)
 
     region = args.region
     instance_type = args.instance_type
@@ -330,6 +503,7 @@ def launch_run(args: argparse.Namespace) -> None:
     instance_id: Optional[str] = None
     security_group_id: Optional[str] = None
     created_key = False
+    user_data_path: Optional[Path] = None
 
     try:
         print(f"Using AMI: {ami_id}")
@@ -337,10 +511,10 @@ def launch_run(args: argparse.Namespace) -> None:
         created_key = True
         security_group_id = create_security_group(security_group_name, region)
 
-        user_data = remote_script(args.max_runtime_minutes)
+        user_data = ttl_user_data(args.max_runtime_minutes)
         with tempfile.NamedTemporaryFile("w", delete=False) as fh:
             fh.write(user_data)
-            user_data_path = fh.name
+            user_data_path = Path(fh.name)
 
         root_device = root_device_name(ami_id, region)
         block_device = json.dumps(
@@ -406,25 +580,53 @@ def launch_run(args: argparse.Namespace) -> None:
         print(f"Public DNS: {public_dns}")
 
         wait_for_ssh(public_dns, args.ssh_user, key_path)
-        print("SSH is ready; waiting for benchmark archive.")
+        print("SSH is ready; starting the benchmark workflow.")
+        script = remote_script(
+            args.workload,
+            args.serving_workers,
+            args.vllm_image,
+            instance_hourly_cost,
+        )
+        remote_proc = subprocess.run(
+            [*ssh_base_args(key_path), f"{args.ssh_user}@{public_dns}", "bash -s"],
+            text=True,
+            input=script,
+            capture_output=True,
+        )
+        (local_results_dir / "ssh-session.stdout.log").write_text(
+            remote_proc.stdout, encoding="utf-8"
+        )
+        (local_results_dir / "ssh-session.stderr.log").write_text(
+            remote_proc.stderr, encoding="utf-8"
+        )
 
-        deadline = time.time() + args.max_runtime_minutes * 60
         archive_path = local_results_dir / "aws-benchmark-results.tgz"
-        while time.time() < deadline:
-            proc = subprocess.run(
-                [*ssh_base_args(key_path), f"{args.ssh_user}@{public_dns}", "test -f ~/aws-benchmark-results.tgz"],
-                text=True,
-                capture_output=True,
+        archive_probe = subprocess.run(
+            [
+                *ssh_base_args(key_path),
+                f"{args.ssh_user}@{public_dns}",
+                "test -f ~/aws-benchmark-results.tgz",
+            ],
+            text=True,
+            capture_output=True,
+        )
+        if archive_probe.returncode == 0:
+            scp_from_instance(
+                public_dns,
+                args.ssh_user,
+                key_path,
+                "~/aws-benchmark-results.tgz",
+                archive_path,
             )
-            if proc.returncode == 0:
-                scp_from_instance(public_dns, args.ssh_user, key_path, "~/aws-benchmark-results.tgz", archive_path)
-                with tarfile.open(archive_path, "r:gz") as tar:
-                    tar.extractall(local_results_dir)
-                print(f"Downloaded results to {local_results_dir}")
-                break
-            time.sleep(30)
-        else:
-            raise RuntimeError("Benchmark archive was not ready before max runtime")
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(local_results_dir, filter="data")
+            print(f"Downloaded results to {local_results_dir}")
+        if remote_proc.returncode != 0:
+            raise RuntimeError(
+                "Remote benchmark failed; inspect ssh-session logs and downloaded partial artifacts"
+            )
+        if archive_probe.returncode != 0:
+            raise RuntimeError("Remote benchmark completed without a downloadable artifact archive")
 
     finally:
         if instance_id and not args.keep_instance:
@@ -440,6 +642,8 @@ def launch_run(args: argparse.Namespace) -> None:
         if key_path.exists() and not args.keep_key:
             key_path.unlink()
             print(f"Deleted local key {key_path}")
+        if user_data_path and user_data_path.exists():
+            user_data_path.unlink()
 
 
 def estimate(args: argparse.Namespace) -> None:
@@ -505,6 +709,7 @@ def preflight(args: argparse.Namespace) -> None:
     identity = json_load_stdout(aws(["sts", "get-caller-identity"], region=args.region))
     print("Account:", identity["Account"])
     print("User ARN:", identity["Arn"])
+    print("G/VT On-Demand vCPU quota:", quota_value(args.region))
     if args.ami_id:
         print("AMI:", args.ami_id)
     else:
@@ -538,8 +743,11 @@ def parser() -> argparse.ArgumentParser:
     launch.add_argument("--instance-type", default="g5.xlarge")
     launch.add_argument("--ami-id", default=None)
     launch.add_argument("--ssh-user", default="ubuntu")
-    launch.add_argument("--volume-gb", type=int, default=80)
+    launch.add_argument("--volume-gb", type=int, default=120)
     launch.add_argument("--max-runtime-minutes", type=int, default=60)
+    launch.add_argument("--workload", choices=("kernel", "serving", "all"), default="all")
+    launch.add_argument("--serving-workers", type=int, choices=(1, 4), default=1)
+    launch.add_argument("--vllm-image", default=DEFAULT_VLLM_IMAGE)
     launch.add_argument("--confirm-cost", default="NO", help="Must be YES to launch resources.")
     launch.add_argument("--keep-instance", action="store_true", help="Debug only. Leaves EC2 instance running/stopped.")
     launch.add_argument("--keep-key", action="store_true", help="Debug only. Keeps local temporary SSH key.")

@@ -64,3 +64,14 @@ This checklist separates implemented evidence from targets. Target values are no
 - Less than $10 per million output tokens.
 - 2.0x four-GPU custom-attention speedup at sequence length 4,096.
 - 10% CI performance-regression budget after a stable controlled baseline exists.
+
+## Phase 4: Reliability, CI, And AWS Automation
+
+- [x] Unit/integration coverage for routing, backpressure, deadlines, failover, cancellation, SSE parsing, metrics, reports, and artifact validity.
+- [x] Prometheus gateway metrics and optional OTLP request-span export.
+- [x] GitHub Actions gates for C++ CPU correctness, Python serving tests, report schemas, and GPU helper-script syntax.
+- [x] Configurable throughput/p95 TTFT/p95 E2E regression checker that accepts only controlled real-GPU artifacts.
+- [x] AWS pre-launch quota/cost/TTL summary and explicit `--confirm-cost YES`.
+- [x] SSH-executed kernel/serving/all workloads with TTL user-data, partial artifact collection, Docker cleanup, instance termination, and temporary key/security-group deletion.
+- [ ] Enable a 10% performance gate in CI after a stable controlled GPU baseline is committed.
+- [ ] Validate all cleanup paths with a real AWS GPU run.

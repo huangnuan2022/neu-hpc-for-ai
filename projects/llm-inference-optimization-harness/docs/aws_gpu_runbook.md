@@ -1,18 +1,19 @@
 # AWS GPU Runbook
 
-This runbook is for collecting real CUDA/NCCL benchmark numbers for the LLM inference optimization harness without leaving expensive EC2 resources running.
+This runbook collects real Qwen3-8B serving and CUDA/NCCL microbenchmark evidence without leaving expensive EC2 resources running.
 
 ## Cost Guard Model
 
 AWS is pay-as-you-go, not a strict prepaid card. A `$50` budget does not automatically cap charges by itself. The safe pattern here is:
 
 1. Create a budget alert.
-2. Launch a temporary GPU instance with an explicit TTL.
-3. Run the benchmark over SSH.
-4. Download results locally.
-5. Terminate the instance, delete the temporary key pair, and delete the temporary security group.
+2. Check the current G/VT vCPU quota before creating anything.
+3. Launch a temporary GPU instance with an explicit TTL.
+4. Run the selected workload over SSH from the normal `ubuntu` account.
+5. Download complete or partial results locally.
+6. Terminate the instance, delete the temporary key pair, and delete the temporary security group.
 
-The helper script defaults to termination cleanup and refuses to launch unless you pass `--confirm-cost YES`.
+The helper script defaults to termination cleanup and refuses to launch unless you pass `--confirm-cost YES`. Before creating resources it prints the selected workload, instance type, required/current quota, TTL, reviewed hourly price, estimated maximum run cost, serving worker count, and pinned vLLM image.
 
 ## Prerequisites
 
@@ -72,6 +73,9 @@ Use this first. It is cheap and validates the AMI, SSH, CUDA toolchain, and benc
 python3 scripts/aws_gpu_benchmark.py launch-run \
   --region us-east-1 \
   --instance-type g5.xlarge \
+  --workload all \
+  --serving-workers 1 \
+  --vllm-image vllm/vllm-openai:v0.26.0-cu129-ubuntu2404 \
   --max-runtime-minutes 60 \
   --confirm-cost YES
 ```
@@ -86,6 +90,9 @@ Run this only after the single-GPU run works.
 python3 scripts/aws_gpu_benchmark.py launch-run \
   --region us-east-1 \
   --instance-type g5.12xlarge \
+  --workload all \
+  --serving-workers 4 \
+  --vllm-image vllm/vllm-openai:v0.26.0-cu129-ubuntu2404 \
   --max-runtime-minutes 60 \
   --confirm-cost YES
 ```
@@ -100,18 +107,38 @@ Downloaded artifacts are written under:
 aws-results/llm-harness-<timestamp>/
 ```
 
-Useful files:
+Useful files include:
 
 - `aws-benchmark-results/remote-run.log`
 - `aws-benchmark-results/nvidia-smi.txt`
 - `aws-benchmark-results/gpu-count.txt`
 - `aws-benchmark-results/cpu-harness-results/benchmark_summary.md`
-- `aws-benchmark-results/flashattn-1gpu-seq1024.txt`
-- `aws-benchmark-results/flashattn-1gpu-seq2048.txt`
-- `aws-benchmark-results/flashattn-<N>gpu-seq2048.txt`
-- `aws-benchmark-results/flashattn-<N>gpu-seq4096.txt`
+- `aws-benchmark-results/cuda-attention/cuda_attention_benchmark.json`
+- `aws-benchmark-results/cuda-attention/cuda_attention_benchmark.md`
+- `aws-benchmark-results/nsight/*.nsys-rep`
+- `aws-benchmark-results/nsight/*.stats.txt`
+- `aws-benchmark-results/serving/serving_benchmark.json`
+- `aws-benchmark-results/serving/serving_requests.csv`
+- `aws-benchmark-results/serving/serving_benchmark.md`
+- `aws-benchmark-results/vllm-image-inspect.json`
+- `ssh-session.stdout.log` and `ssh-session.stderr.log`
 
-After the run, copy the best real GPU metrics into the project README and resume bullets. Do not claim GPU speedup until these files prove it.
+The runner supports `--workload kernel`, `--workload serving`, or `--workload all`. A real serving report is marked valid only when it records a clean git commit, enough local GPUs for all workers, a pinned and locally inspected vLLM image, the Qwen tokenizer, exact 512-token inputs, exact 128-token outputs, and zero measured request failures/timeouts.
+
+After the run, use measured values from validated artifacts in the README and resume. Do not copy target values or fake-backend timings.
+
+## Performance Regression Gate
+
+After two controlled real-GPU artifacts exist, compare them with:
+
+```bash
+llm-serving-regression-check \
+  --baseline path/to/baseline/serving_benchmark.json \
+  --current path/to/current/serving_benchmark.json \
+  --max-regression 0.10
+```
+
+This gate checks output throughput, p95 TTFT, and p95 E2E for the same scenario matrix. It refuses fake or otherwise invalid artifacts. It is not enabled in hosted-runner CI until a stable controlled GPU baseline exists.
 
 ## Manual Cleanup Checklist
 

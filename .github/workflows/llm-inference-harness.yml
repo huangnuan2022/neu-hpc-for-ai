@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - "projects/llm-inference-optimization-harness/**"
+      - "week_08/dist-flash-attn/**"
       - ".github/workflows/llm-inference-harness.yml"
   pull_request:
     paths:
       - "projects/llm-inference-optimization-harness/**"
+      - "week_08/dist-flash-attn/**"
       - ".github/workflows/llm-inference-harness.yml"
 
 jobs:
@@ -31,6 +33,11 @@ jobs:
         run: make test
       - name: Serving unit and integration tests
         run: pytest
+      - name: CUDA benchmark host-side script gates
+        run: |
+          python -m py_compile ../../week_08/dist-flash-attn/scripts/generate_sdpa_fixture.py
+          python -m py_compile ../../week_08/dist-flash-attn/scripts/run_gpu_sweep.py
+          bash -n ../../week_08/dist-flash-attn/scripts/profile_nsight.sh
       - name: Benchmark and correctness gate
         run: make bench
       - name: Upload benchmark artifacts
