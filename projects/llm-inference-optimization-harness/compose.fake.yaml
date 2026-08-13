@@ -1,0 +1,39 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gateway
+    environment:
+      SERVING_BACKEND_ENDPOINTS: http://worker-0:8000,http://worker-1:8000,http://worker-2:8000,http://worker-3:8000
+      SERVING_MODEL: Qwen/Qwen3-8B
+      SERVING_MAX_IN_FLIGHT: "64"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - worker-0
+      - worker-1
+      - worker-2
+      - worker-3
+
+  worker-0: &fake-worker
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gateway
+    command: ["llm-serving-fake-backend", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      FAKE_BACKEND_ID: worker-0
+
+  worker-1:
+    <<: *fake-worker
+    environment:
+      FAKE_BACKEND_ID: worker-1
+
+  worker-2:
+    <<: *fake-worker
+    environment:
+      FAKE_BACKEND_ID: worker-2
+
+  worker-3:
+    <<: *fake-worker
+    environment:
+      FAKE_BACKEND_ID: worker-3

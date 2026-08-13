@@ -4,17 +4,22 @@ Course projects and polished follow-up systems work for high-performance AI infe
 
 ## Featured Project
 
-### LLM Inference Optimization Harness
+### Distributed LLM Serving & GPU Optimization System
 
 Location: `projects/llm-inference-optimization-harness`
 
-This project turns the course CUDA/NCCL attention and MoE implementations into a reproducible benchmark and correctness harness for modern LLM inference systems. It includes:
+This project combines a real Qwen3-8B serving path with a separate CUDA/NCCL microbenchmark path. The serving gateway is implemented locally and ready to switch from deterministic fake backends to four data-parallel vLLM GPU workers. It includes:
 
+- Streaming FastAPI inference endpoints with bounded admission control, deadlines, health-aware failover, and cancellation cleanup.
+- Stable-prefix affinity routing with load-aware override across four worker endpoints.
+- Prometheus metrics and OpenTelemetry request traces.
 - FlashAttention-style streaming softmax correctness checks.
 - Ring sequence-parallel attention simulation across logical shards.
 - Top-1 MoE routing across expert shards.
 - CPU-local benchmark artifacts for machines without CUDA.
-- GitHub Actions regression gate for build, smoke tests, and benchmark correctness.
+- GitHub Actions gates for serving tests, build, smoke tests, and benchmark correctness.
+
+vLLM supplies continuous batching, KV-cache management, and model execution. The custom CUDA/NCCL attention code is a separate microbenchmark and is not presented as integrated into vLLM.
 
 Latest local benchmark summary:
 
@@ -26,9 +31,10 @@ Run locally:
 
 ```bash
 cd projects/llm-inference-optimization-harness
-make test
-make bench
+make serving-demo
 ```
+
+Run all CPU-local tests with `make test-all`; run the existing benchmark artifacts with `make bench`.
 
 Results are written to:
 

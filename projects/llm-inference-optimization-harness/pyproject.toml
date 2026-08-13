@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "distributed-llm-serving-system"
+version = "0.1.0"
+description = "A reliability-focused gateway and benchmark system for Qwen3-8B serving."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "opentelemetry-api>=1.36,<2",
+  "prometheus-client>=0.22,<1",
+  "uvicorn>=0.35,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.4,<10",
+]
+telemetry = [
+  "opentelemetry-exporter-otlp-proto-http>=1.36,<2",
+  "opentelemetry-sdk>=1.36,<2",
+]
+
+[project.scripts]
+llm-serving-gateway = "llm_serving_system.gateway:main"
+llm-serving-fake-backend = "llm_serving_system.fake_backend:main"
+llm-serving-demo = "llm_serving_system.local_demo:main"
+
+[tool.setuptools]
+package-dir = {"" = "serving/src"}
+
+[tool.setuptools.packages.find]
+where = ["serving/src"]
+
+[tool.pytest.ini_options]
+testpaths = ["serving/tests"]
+addopts = "-q"

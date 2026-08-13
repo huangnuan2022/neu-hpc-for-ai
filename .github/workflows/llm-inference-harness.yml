@@ -1,4 +1,4 @@
-name: LLM Inference Harness
+name: Distributed LLM Serving System
 
 on:
   push:
@@ -18,10 +18,19 @@ jobs:
         working-directory: projects/llm-inference-optimization-harness
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: projects/llm-inference-optimization-harness/pyproject.toml
+      - name: Install serving test dependencies
+        run: python -m pip install -e '.[test]'
       - name: Build
         run: make
       - name: Smoke tests
         run: make test
+      - name: Serving unit and integration tests
+        run: pytest
       - name: Benchmark and correctness gate
         run: make bench
       - name: Upload benchmark artifacts
