@@ -1,0 +1,4 @@
+/usr/include/nccl.h
+/usr/lib/x86_64-linux-gnu/libnccl.so
+/usr/lib/x86_64-linux-gnu/libnccl.so.2
+/usr/lib/x86_64-linux-gnu/libnccl.so.2.31.2

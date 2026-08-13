@@ -2,7 +2,7 @@
 
 A single-model ML systems project for serving and profiling `Qwen/Qwen3-8B` in BF16. It connects a reliability-focused FastAPI gateway, four data-parallel vLLM workers, a reproducible serving benchmark harness, and the repository's CUDA/NCCL FlashAttention-style microbenchmark into one traceable evidence path.
 
-The current implementation contains the Phase 1 serving gateway and the original CPU correctness harness. GPU serving and CUDA/NCCL performance values remain pending until real AWS hardware is available.
+The implementation now includes the serving gateway, serving benchmark harness, hardened CUDA/NCCL microbenchmark, and a validated single-A10G AWS evidence set. Four-GPU serving and ring-scaling measurements remain pending.
 
 ## System Boundary
 
@@ -140,7 +140,7 @@ These CPU timings are not GPU speedup claims.
 
 The custom microbenchmark under `../../week_08/dist-flash-attn` now implements persistent buffers and NCCL communicators, warm-up plus repeated median/p95 timing, maximum per-device CUDA-event duration, PyTorch SDPA fixtures, exact/observed memory accounting, an overlap-versus-serialized K/V experiment, and Nsight collection scripts.
 
-The methodology code is complete, but this laptop has no CUDA toolkit or NVIDIA GPU. CUDA compilation, correctness, speedup, allocation, overlap, and profiling claims remain pending real hardware.
+The CUDA path has been compiled and run on one NVIDIA A10G. The checked-in evidence includes PyTorch SDPA correctness, 1,024/2,048/4,096-token steady-state sweeps, allocator telemetry, and an Nsight Systems trace. Multi-GPU NCCL scaling and overlap measurements remain pending a four-GPU quota increase.
 
 The full limitation audit and phase status live in `docs/implementation_checklist.md`.
 
@@ -148,15 +148,21 @@ The full limitation audit and phase status live in `docs/implementation_checklis
 
 `scripts/aws_gpu_benchmark.py` provisions temporary GPU instances with explicit cost confirmation, a TTL shutdown, result download, automatic instance termination, temporary SSH keys, and an IP-restricted security group. The AWS account currently has a $50 monthly alert, but that alert is not a hard spending cap.
 
-No AWS GPU benchmark has run yet because the account's On-Demand G/VT quota is still zero. Measured Qwen3-8B and CUDA/NCCL values will replace targets only after result artifacts have been downloaded and validated.
+The single-GPU run validated both successful and failed-run cleanup paths: both EC2 instances terminated and all temporary keys and security groups were deleted. The current G/VT quota is four vCPUs, enough for `g5.xlarge`; a `g5.12xlarge` requires 48 vCPUs.
 
-## Measurement Targets, Not Results
+## Measured Single-GPU Evidence
 
-The following are conservative goals for the upcoming AWS run, not achieved claims:
+The committed evidence under `results/aws-a10g-1gpu-20260813/` was collected from BF16 Qwen3-8B on one NVIDIA A10G using the pinned vLLM image digest recorded in the report. The workload used exact 512-token inputs, exact 128-token outputs, one warm-up, and five measured runs per concurrency.
 
-- 200+ output tokens/s at concurrency 32.
-- Less than 2.0 seconds p95 TTFT.
-- 2.0x throughput over sequential serving.
-- Less than $10 per million output tokens.
-- 2.0x four-GPU custom-attention speedup at sequence length 4,096.
-- 98.8% lower formula-validated minimal per-GPU attention state versus a full 4,096 x 4,096 FP32 score matrix; the double-buffer implementation is 98.0% lower by explicit workspace bytes, with CUDA allocation deltas pending GPU measurement.
+- `739.868` aggregate output tokens/s at concurrency 32, `25.37x` the request-at-a-time baseline.
+- `352 ms` p95 TTFT, `41.5 ms` p95 TPOT, and `5.537 s` p95 E2E at concurrency 32.
+- Zero failures or timeouts across 285 measured requests.
+- An estimated `$0.378` per million output tokens at concurrency 32, based on measured workload time and the supplied `$1.006/hour` instance price; setup time is excluded.
+- A `18.333 ms` median custom-attention forward at sequence length 4,096 and dimension 64.
+- `95.26%` lower formula-based minimal state and `92.14%` lower explicit workspace than a full 4,096 x 4,096 FP32 score matrix on one GPU.
+
+See the [serving report](results/aws-a10g-1gpu-20260813/serving/serving_benchmark.md), [CUDA report](results/aws-a10g-1gpu-20260813/cuda-attention/cuda_attention_benchmark.md), and [measurement notes](results/aws-a10g-1gpu-20260813/measurement_notes.md).
+
+## Pending Four-GPU Targets
+
+The following remain targets, not achieved claims: a measured 1/2/4-GPU NCCL scaling matrix, a four-GPU overlap comparison, and the formula-predicted 98.8159% minimal-state / 98.0347% explicit-workspace reductions at sequence length 4,096. Four-GPU numbers will not be added to resume bullets until a `g5.12xlarge` run produces validated artifacts.

@@ -1,0 +1,36 @@
+Generating SQLite file /home/ubuntu/aws-benchmark-results/nsight/attention-seq4096-1gpu.sqlite from /home/ubuntu/aws-benchmark-results/nsight/attention-seq4096-1gpu.nsys-rep
+Processing [/home/ubuntu/aws-benchmark-results/nsight/attention-seq4096-1gpu.sqlite] with [/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/reports/cuda_gpu_kern_sum.py]...
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
+ Time (%)  Total Time (ns)  Instances   Avg (ns)    Med (ns)   Min (ns)  Max (ns)  StdDev (ns)                                                  Name
+ --------  ---------------  ---------  ----------  ----------  --------  --------  -----------  ----------------------------------------------------------------------------------------------------
+    100.0        256741638         14  18338688.4  18349745.0  18313120  18357632      18009.8  flash_attn_step_kernel(const float *, const float *, const float *, float *, float *, float *, int,…
+      0.0            62496         14      4464.0      4448.0      4416      4512         27.4  finalize_output_kernel(const float *, const float *, float *, int, int)
+      0.0            34048         14      2432.0      2432.0      2368      2496         39.7  init_flash_state_kernel(float *, float *, float *, int, int)
+
+Processing [/home/ubuntu/aws-benchmark-results/nsight/attention-seq4096-1gpu.sqlite] with [/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/reports/cuda_api_sum.py]...
+
+ ** CUDA API Summary (cuda_api_sum):
+
+ Time (%)  Total Time (ns)  Num Calls   Avg (ns)    Med (ns)   Min (ns)  Max (ns)  StdDev (ns)            Name
+ --------  ---------------  ---------  ----------  ----------  --------  --------  -----------  -------------------------
+     98.3        256750229         14  18339302.1  18348940.0  18315289  18358200      17093.5  cudaEventSynchronize
+      0.5          1193597         22     54254.4      7190.5      2290    227935      63240.7  cudaMalloc
+      0.4          1129014          8    141126.8    150333.0     62961    181604      40351.4  cudaMemcpy
+      0.4           928592         22     42208.7      6905.5      2220    114912      43784.7  cudaFree
+      0.1           354871         42      8449.3      5130.0      4711     90162      13295.4  cudaLaunchKernel
+      0.1           314521         28     11232.9     12115.5      5841     32411       5979.4  cudaMemcpyAsync
+      0.1           132891         42      3164.1      2930.0      1070     20190       3098.9  cudaEventRecord
+      0.0           128913          1    128913.0    128913.0    128913    128913          0.0  cuLibraryLoadData
+      0.0           126280         14      9020.0      8950.0      6340     10340        970.1  cudaStreamSynchronize
+      0.0            73692          4     18423.0     17300.0     14971     24121       4201.6  cudaMemGetInfo
+      0.0            48322          4     12080.5      4940.5      3250     35191      15486.3  cudaStreamCreateWithFlags
+      0.0            23800         12      1983.3       700.0       460     15900       4386.8  cudaEventDestroy
+      0.0            21820         14      1558.6      1450.0      1340      2540        302.5  cudaStreamWaitEvent
+      0.0            17980          4      4495.0      4050.0      3160      6720       1556.1  cudaStreamDestroy
+      0.0            12241         42       291.5       270.0       180       580        111.3  cuKernelGetName
+      0.0            10610          4      2652.5      1000.0       650      7960       3551.8  cudaEventCreate
+      0.0             6510          8       813.8       550.0       530      2520        691.1  cudaEventCreateWithFlags
+      0.0             2040          1      2040.0      2040.0      2040      2040          0.0  cuModuleGetLoadingMode
+      0.0             1310          3       436.7       420.0       360       530         86.2  cuLibraryGetKernel

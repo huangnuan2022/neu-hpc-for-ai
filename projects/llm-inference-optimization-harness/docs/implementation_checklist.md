@@ -32,7 +32,7 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] `/health`, Prometheus `/metrics`, and OpenTelemetry request spans.
 - [x] Deterministic fake backend for local tests; fake results are never performance evidence.
 - [x] Local four-worker demo and separate four-GPU vLLM Compose configuration.
-- [ ] AWS Qwen3-8B BF16 validation (blocked on EC2 GPU quota).
+- [x] AWS Qwen3-8B BF16 validation on one NVIDIA A10G.
 
 ## Phase 2: Serving Benchmark Harness
 
@@ -42,7 +42,8 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] vLLM KV-cache, prefix-cache, running-request, and waiting-request metric sampling when exposed by workers.
 - [x] JSON, CSV, and Markdown artifacts with configuration, git SHA, AMI, driver, CUDA, GPU, and pinned-image metadata.
 - [x] Schema validation and request-level CSV evidence; fake-backend artifacts are explicitly invalid for performance claims.
-- [ ] Measured single- and four-GPU Qwen3-8B artifacts (blocked on AWS quota).
+- [x] Measured single-GPU Qwen3-8B artifact with 20 measured batches and 285 successful requests.
+- [ ] Measured four-GPU Qwen3-8B artifact (requires a 48-vCPU G/VT quota).
 
 ## Phase 3: CUDA/NCCL Microbenchmark
 
@@ -53,15 +54,21 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] Nsight Systems trace and stats collection script.
 - [x] Separate-stream, double-buffered K/V rotation and serialized comparison mode.
 - [x] Formula and CPU test for 98.8159% minimal-state and 98.0347% explicit double-buffer-workspace reductions at 4,096 tokens on four GPUs.
-- [ ] Compile and correctness validation on NVIDIA hardware.
-- [ ] Measured 1/2/4-GPU latency, scaling, allocation deltas, overlap benefit, and Nsight artifacts.
+- [x] Compile and PyTorch SDPA correctness validation on one NVIDIA A10G.
+- [x] Measured single-GPU latency, allocation deltas, and Nsight artifacts.
+- [ ] Measured 2/4-GPU latency, scaling, allocation deltas, and overlap benefit.
+
+## Measured Single-GPU Results
+
+- 739.868 output tokens/s at concurrency 32.
+- 352 ms p95 TTFT and 5.537 s p95 E2E at concurrency 32.
+- 25.37x aggregate throughput over request-at-a-time serving.
+- $0.378 estimated cost per million output tokens during the measured concurrency-32 workload.
+- Zero errors and timeouts across 285 measured requests.
+- 18.333 ms median custom-attention forward at sequence length 4,096 on one A10G.
 
 ## Targets Pending Measurement
 
-- 200+ output tokens/s at concurrency 32.
-- Less than 2.0 seconds p95 TTFT.
-- 2.0x throughput over sequential serving.
-- Less than $10 per million output tokens.
 - 2.0x four-GPU custom-attention speedup at sequence length 4,096.
 - 10% CI performance-regression budget after a stable controlled baseline exists.
 
@@ -74,4 +81,12 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] AWS pre-launch quota/cost/TTL summary and explicit `--confirm-cost YES`.
 - [x] SSH-executed kernel/serving/all workloads with TTL user-data, partial artifact collection, Docker cleanup, instance termination, and temporary key/security-group deletion.
 - [ ] Enable a 10% performance gate in CI after a stable controlled GPU baseline is committed.
-- [ ] Validate all cleanup paths with a real AWS GPU run.
+- [x] Validate successful and failed-run cleanup paths with real AWS GPU runs.
+
+## Phase 5: AWS Measurement
+
+- [x] `g5.xlarge` single-GPU CUDA compile, correctness, performance, and Nsight run.
+- [x] `g5.xlarge` BF16 Qwen3-8B serving run at concurrency 1/8/16/32.
+- [x] Download and validate JSON, CSV, Markdown, environment, and profiling artifacts.
+- [x] Confirm EC2, temporary key-pair, and temporary security-group cleanup.
+- [ ] Obtain a 48-vCPU G/VT quota and run the four-A10G matrix.
