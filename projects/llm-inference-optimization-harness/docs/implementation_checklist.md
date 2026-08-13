@@ -89,4 +89,5 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] `g5.xlarge` BF16 Qwen3-8B serving run at concurrency 1/8/16/32.
 - [x] Download and validate JSON, CSV, Markdown, environment, and profiling artifacts.
 - [x] Confirm EC2, temporary key-pair, and temporary security-group cleanup.
-- [ ] Obtain a 48-vCPU G/VT quota and run the four-A10G matrix.
+- [x] Request a 48-vCPU G/VT quota after the single-GPU run (request `2bfcb1b6488b4bb9909013691eb0e6eeGzuEahDh`, pending as of 2026-08-14).
+- [ ] Obtain the 48-vCPU G/VT quota and run the four-A10G matrix.

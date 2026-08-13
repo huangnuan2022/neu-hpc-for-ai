@@ -148,7 +148,7 @@ The full limitation audit and phase status live in `docs/implementation_checklis
 
 `scripts/aws_gpu_benchmark.py` provisions temporary GPU instances with explicit cost confirmation, a TTL shutdown, result download, automatic instance termination, temporary SSH keys, and an IP-restricted security group. The AWS account currently has a $50 monthly alert, but that alert is not a hard spending cap.
 
-The single-GPU run validated both successful and failed-run cleanup paths: both EC2 instances terminated and all temporary keys and security groups were deleted. The current G/VT quota is four vCPUs, enough for `g5.xlarge`; a `g5.12xlarge` requires 48 vCPUs.
+The single-GPU run validated both successful and failed-run cleanup paths: both EC2 instances terminated and all temporary keys and security groups were deleted. As of 2026-08-14, the G/VT quota is four vCPUs, enough for `g5.xlarge`, and a request for the 48 vCPUs required by `g5.12xlarge` is pending under request `2bfcb1b6488b4bb9909013691eb0e6eeGzuEahDh`.
 
 ## Measured Single-GPU Evidence
 
