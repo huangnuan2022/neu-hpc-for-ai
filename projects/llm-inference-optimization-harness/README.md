@@ -2,7 +2,7 @@
 
 A single-model ML systems project for serving and profiling `Qwen/Qwen3-8B` in BF16. It connects a reliability-focused FastAPI gateway, four data-parallel vLLM workers, a reproducible serving benchmark harness, and the repository's CUDA/NCCL FlashAttention-style microbenchmark into one traceable evidence path.
 
-The implementation now includes the serving gateway, serving benchmark harness, hardened CUDA/NCCL microbenchmark, and a validated single-A10G AWS evidence set. Four-GPU serving and ring-scaling measurements remain pending.
+The implementation now includes the serving gateway, serving benchmark harness, hardened CUDA/NCCL microbenchmark, and validated one- and four-A10G AWS evidence sets. Every performance claim below links to the committed request-level or profiler artifact that supports it.
 
 ## System Boundary
 
@@ -140,7 +140,7 @@ These CPU timings are not GPU speedup claims.
 
 The custom microbenchmark under `../../week_08/dist-flash-attn` now implements persistent buffers and NCCL communicators, warm-up plus repeated median/p95 timing, maximum per-device CUDA-event duration, PyTorch SDPA fixtures, exact/observed memory accounting, an overlap-versus-serialized K/V experiment, and Nsight collection scripts.
 
-The CUDA path has been compiled and run on one NVIDIA A10G. The checked-in evidence includes PyTorch SDPA correctness, 1,024/2,048/4,096-token steady-state sweeps, allocator telemetry, and an Nsight Systems trace. Multi-GPU NCCL scaling and overlap measurements remain pending a four-GPU quota increase.
+The CUDA path has been compiled and run on four NVIDIA A10Gs. The checked-in evidence includes PyTorch SDPA correctness on 1/2/4 GPUs, 1,024/2,048/4,096-token steady-state sweeps, allocator telemetry, overlap-versus-serialized K/V rotation, and an Nsight Systems trace.
 
 The full limitation audit and phase status live in `docs/implementation_checklist.md`.
 
@@ -148,7 +148,7 @@ The full limitation audit and phase status live in `docs/implementation_checklis
 
 `scripts/aws_gpu_benchmark.py` provisions temporary GPU instances with explicit cost confirmation, a TTL shutdown, result download, automatic instance termination, temporary SSH keys, and an IP-restricted security group. The AWS account currently has a $50 monthly alert, but that alert is not a hard spending cap.
 
-The single-GPU run validated both successful and failed-run cleanup paths: both EC2 instances terminated and all temporary keys and security groups were deleted. As of 2026-08-14, the G/VT quota is four vCPUs, enough for `g5.xlarge`, and a request for the 48 vCPUs required by `g5.12xlarge` is pending under request `2bfcb1b6488b4bb9909013691eb0e6eeGzuEahDh`.
+AWS approved the 48-vCPU G/VT quota used by the `g5.12xlarge` run. The one- and four-GPU runs validated successful and failed-launch cleanup paths: all EC2 instances terminated, attached volumes were deleted, and temporary keys and security groups were removed. The four-GPU instance ran for about 21 minutes 38 seconds before termination was requested; its prorated resource cost is estimated at `$2.05` before credits, while AWS billing data may post later.
 
 ## Measured Single-GPU Evidence
 
@@ -163,6 +163,23 @@ The committed evidence under `results/aws-a10g-1gpu-20260813/` was collected fro
 
 See the [serving report](results/aws-a10g-1gpu-20260813/serving/serving_benchmark.md), [CUDA report](results/aws-a10g-1gpu-20260813/cuda-attention/cuda_attention_benchmark.md), and [measurement notes](results/aws-a10g-1gpu-20260813/measurement_notes.md).
 
-## Pending Four-GPU Targets
+## Measured Four-GPU Evidence
 
-The following remain targets, not achieved claims: a measured 1/2/4-GPU NCCL scaling matrix, a four-GPU overlap comparison, and the formula-predicted 98.8159% minimal-state / 98.0347% explicit-workspace reductions at sequence length 4,096. Four-GPU numbers will not be added to resume bullets until a `g5.12xlarge` run produces validated artifacts.
+The committed evidence under `results/aws-a10g-4gpu-20260821/` was collected on one `g5.12xlarge` with four NVIDIA A10Gs. It uses the same model, image digest, exact token lengths, warm-up, and measured-run counts as the single-GPU serving artifact.
+
+- `786.408` aggregate output tokens/s, `243 ms` p95 TTFT, `39.2 ms` p95 TPOT, and `5.195 s` p95 E2E at concurrency 32.
+- Zero failures or timeouts across 285 measured requests, with all four workers represented in request-level routing evidence.
+- An estimated `$2.003` per million output tokens at concurrency 32 using the full `$5.672/hour` instance price; setup time is excluded.
+- Compared with the controlled one-A10G concurrency-32 artifact, four workers increased throughput by `6.29%`, reduced p95 TTFT by `30.99%`, and reduced p95 E2E by `6.18%`. This is not linear serving throughput scaling and is reported as measured.
+- The CUDA/NCCL sequence-4,096 sweep reduced median forward time from `18.348 ms` on one GPU to `11.092 ms` on two and `7.380 ms` on four, a `2.49x` four-GPU speedup.
+- Overlapped K/V rotation reduced four-GPU median latency by `6.49%` versus the serialized mode (`7.380 ms` versus `7.892 ms`).
+- The sequence-128 1/2/4-GPU correctness sweep had at most `2.235e-8` maximum absolute error against PyTorch SDPA.
+- At sequence length 4,096, the formula-based minimal state is `98.8159%` smaller and the explicitly requested workspace is `98.0347%` smaller per GPU than a full 4,096 x 4,096 FP32 score matrix. These are memory-accounting results, not allocator-residency measurements.
+
+The serving comparison also exposes a useful bottleneck: spreading one prefix-heavy workload over four independent vLLM replicas reduces batching and cache locality, so serving throughput rose only `6.29%` even though the standalone sequence-parallel kernel scaled `2.49x`. The gateway prioritizes affinity but overrides it under load, which produced a 75% affinity-route rate at concurrency 32.
+
+See the [four-GPU serving report](results/aws-a10g-4gpu-20260821/serving/serving_benchmark.md), [CUDA/NCCL report](results/aws-a10g-4gpu-20260821/cuda-attention/cuda_attention_benchmark.md), [Nsight summary](results/aws-a10g-4gpu-20260821/nsight/attention-seq4096-4gpu.stats.txt), and [measurement notes](results/aws-a10g-4gpu-20260821/measurement_notes.md).
+
+## Remaining Target
+
+The configurable 10% CI performance-regression gate remains disabled until repeated controlled GPU runs establish a stable baseline. It is not claimed as an enforced result.

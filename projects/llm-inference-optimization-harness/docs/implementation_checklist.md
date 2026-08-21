@@ -10,14 +10,14 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] Audited `week_08/dist-flash-attn` and `week_07/deepseekmoe-labs/cuda_nccl`.
 - [x] Confirmed the AWS runner has explicit cost confirmation, TTL shutdown, automatic result download, instance termination, temporary key deletion, and temporary security-group deletion.
 
-### Known CUDA Benchmark Limitations
+### Baseline CUDA Limitations Found And Resolved
 
-- The attention forward functions allocate/free workspace and initialize NCCL communicators and CUDA streams inside each call.
-- The current executable records only one timed call and does not report warm-up, repeated samples, median, or p95.
-- The multi-GPU timing uses CUDA events recorded on device 0 around host-side work spanning several devices; it is not a defensible distributed steady-state measurement.
-- Correctness currently compares the multi-GPU result with the same custom single-GPU implementation, not PyTorch SDPA.
-- K/V communication and attention compute use the same stream and are serialized; overlap has not yet been demonstrated.
-- Existing memory reductions are formula-based estimates, not measured allocator telemetry.
+- The baseline allocated workspace and initialized NCCL communicators and streams inside each call; the hardened path reuses them outside steady-state timing.
+- The baseline recorded one timed call; the hardened path uses five warm-ups and 20 measured samples with median and p95.
+- The baseline timed multi-GPU work only from device 0; the hardened path takes the maximum CUDA-event duration across participating devices.
+- The baseline compared multi-GPU output only with the custom single-GPU implementation; the correctness sweep now uses PyTorch SDPA.
+- The baseline serialized communication and compute; the measured matrix now includes separate-stream double buffering and a serialized control.
+- Memory reporting now separates formula-based minimal state, exact `cudaMalloc` workspace requests, and observed allocator deltas.
 
 ## Phase 1: Serving System
 
@@ -43,7 +43,7 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] JSON, CSV, and Markdown artifacts with configuration, git SHA, AMI, driver, CUDA, GPU, and pinned-image metadata.
 - [x] Schema validation and request-level CSV evidence; fake-backend artifacts are explicitly invalid for performance claims.
 - [x] Measured single-GPU Qwen3-8B artifact with 20 measured batches and 285 successful requests.
-- [ ] Measured four-GPU Qwen3-8B artifact (requires a 48-vCPU G/VT quota).
+- [x] Measured four-GPU Qwen3-8B artifact on four NVIDIA A10Gs with 285 successful requests.
 
 ## Phase 3: CUDA/NCCL Microbenchmark
 
@@ -56,7 +56,7 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] Formula and CPU test for 98.8159% minimal-state and 98.0347% explicit double-buffer-workspace reductions at 4,096 tokens on four GPUs.
 - [x] Compile and PyTorch SDPA correctness validation on one NVIDIA A10G.
 - [x] Measured single-GPU latency, allocation deltas, and Nsight artifacts.
-- [ ] Measured 2/4-GPU latency, scaling, allocation deltas, and overlap benefit.
+- [x] Measured 2/4-GPU latency, scaling, allocation deltas, and overlap benefit.
 
 ## Measured Single-GPU Results
 
@@ -67,10 +67,19 @@ This checklist separates implemented evidence from targets. Target values are no
 - Zero errors and timeouts across 285 measured requests.
 - 18.333 ms median custom-attention forward at sequence length 4,096 on one A10G.
 
-## Targets Pending Measurement
+## Measured Four-GPU Results
 
-- 2.0x four-GPU custom-attention speedup at sequence length 4,096.
-- 10% CI performance-regression budget after a stable controlled baseline exists.
+- 786.408 output tokens/s, 243 ms p95 TTFT, and 5.195 s p95 E2E at concurrency 32.
+- Zero errors and timeouts across 285 measured requests.
+- 6.29% higher serving throughput and 30.99% lower p95 TTFT than the controlled one-A10G concurrency-32 artifact.
+- 7.380 ms median custom-attention forward at sequence length 4,096 on four A10Gs, a 2.49x speedup over the in-run one-GPU baseline.
+- 6.49% lower four-GPU median latency with overlapped instead of serialized K/V rotation.
+- 2.235e-8 maximum absolute error against PyTorch SDPA in the sequence-128 1/2/4-GPU correctness sweep.
+- 98.8159% formula-based minimal-state reduction and 98.0347% explicit-workspace reduction per GPU at sequence length 4,096.
+
+## Target Pending Measurement
+
+- Enable the configurable 10% CI performance-regression budget only after repeated controlled GPU runs establish a stable baseline.
 
 ## Phase 4: Reliability, CI, And AWS Automation
 
@@ -89,5 +98,7 @@ This checklist separates implemented evidence from targets. Target values are no
 - [x] `g5.xlarge` BF16 Qwen3-8B serving run at concurrency 1/8/16/32.
 - [x] Download and validate JSON, CSV, Markdown, environment, and profiling artifacts.
 - [x] Confirm EC2, temporary key-pair, and temporary security-group cleanup.
-- [x] Request a 48-vCPU G/VT quota after the single-GPU run (request `2bfcb1b6488b4bb9909013691eb0e6eeGzuEahDh`, pending as of 2026-08-14).
-- [ ] Obtain the 48-vCPU G/VT quota and run the four-A10G matrix.
+- [x] Request and obtain the 48-vCPU G/VT quota required by `g5.12xlarge`.
+- [x] Run the four-A10G serving and 1/2/4-GPU CUDA/NCCL matrices.
+- [x] Download and validate request-level, environment, CUDA/NCCL, and Nsight artifacts.
+- [x] Confirm instance termination plus volume, key-pair, security-group, and local-key cleanup.

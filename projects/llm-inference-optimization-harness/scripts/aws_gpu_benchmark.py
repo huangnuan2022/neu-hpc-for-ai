@@ -41,12 +41,37 @@ G_VT_QUOTA_CODE = "L-DB2E81BA"
 DEFAULT_VLLM_IMAGE = "vllm/vllm-openai:v0.26.0-cu129-ubuntu2404"
 
 
-def run(cmd: list[str], *, check: bool = True, input_text: Optional[str] = None) -> subprocess.CompletedProcess[str]:
+def run(
+    cmd: list[str],
+    *,
+    check: bool = True,
+    input_text: Optional[str] = None,
+) -> subprocess.CompletedProcess[str]:
     print("+", " ".join(shlex.quote(part) for part in cmd))
-    return subprocess.run(cmd, check=check, text=True, input=input_text, capture_output=True)
+    proc = subprocess.run(
+        cmd,
+        check=False,
+        text=True,
+        input=input_text,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        if proc.stdout:
+            print(proc.stdout.rstrip(), file=sys.stderr)
+        if proc.stderr:
+            print(proc.stderr.rstrip(), file=sys.stderr)
+        if check:
+            proc.check_returncode()
+    return proc
 
 
-def aws(args: list[str], *, region: str, check: bool = True, input_text: Optional[str] = None) -> subprocess.CompletedProcess[str]:
+def aws(
+    args: list[str],
+    *,
+    region: str,
+    check: bool = True,
+    input_text: Optional[str] = None,
+) -> subprocess.CompletedProcess[str]:
     return run(["aws", "--region", region, *args], check=check, input_text=input_text)
 
 
@@ -473,6 +498,18 @@ def quota_value(region: str) -> float:
     return float(proc.stdout.strip())
 
 
+def estimated_cost_components(
+    instance_hourly_cost: float,
+    minutes: int,
+    volume_gb: int,
+) -> tuple[float, float, float]:
+    hours = minutes / 60.0
+    compute = instance_hourly_cost * hours
+    public_ipv4 = 0.005 * hours
+    gp3 = 0.08 * volume_gb * (minutes / (60.0 * 24.0 * 30.0))
+    return compute, public_ipv4, gp3
+
+
 def launch_cost_summary(args: argparse.Namespace) -> tuple[float, int]:
     if args.region != DEFAULT_REGION:
         raise SystemExit("The built-in launch cost guard currently supports only us-east-1.")
@@ -481,9 +518,12 @@ def launch_cost_summary(args: argparse.Namespace) -> tuple[float, int]:
     if price is None or required_vcpus is None:
         raise SystemExit(f"No reviewed price/quota mapping for {args.instance_type}")
     current_quota = quota_value(args.region)
-    hours = args.max_runtime_minutes / 60.0
-    estimated_max = price * hours + 0.005 * hours
-    estimated_max += 0.08 * args.volume_gb * (args.max_runtime_minutes / (60.0 * 24.0 * 30.0))
+    compute, public_ipv4, gp3 = estimated_cost_components(
+        price,
+        args.max_runtime_minutes,
+        args.volume_gb,
+    )
+    estimated_max = compute + public_ipv4 + gp3
     print("=== AWS launch guard ===")
     print(f"Workload: {args.workload}")
     print(f"Instance: {args.instance_type} ({required_vcpus} vCPUs)")
@@ -491,6 +531,7 @@ def launch_cost_summary(args: argparse.Namespace) -> tuple[float, int]:
     print(f"Serving workers: {args.serving_workers}")
     print(f"TTL: {args.max_runtime_minutes} minutes")
     print(f"Reviewed instance price: about ${price:.3f}/hour in us-east-1")
+    print(f"Root volume: {args.volume_gb}GB gp3 (estimated ${gp3:.4f} for TTL)")
     print(f"Estimated maximum run cost: ${estimated_max:.2f}")
     if args.workload in {"serving", "all"}:
         print(f"Pinned vLLM image: {args.vllm_image}")
@@ -682,10 +723,7 @@ def estimate(args: argparse.Namespace) -> None:
     if price is None:
         print(f"No built-in price for {args.instance_type}; check AWS pricing for {args.region}.")
         return
-    hours = args.minutes / 60.0
-    compute = price * hours
-    ipv4 = 0.005 * hours
-    ebs = 0.08 * args.volume_gb * (args.minutes / (60.0 * 24.0 * 30.0))
+    compute, ipv4, ebs = estimated_cost_components(price, args.minutes, args.volume_gb)
     print(f"Region assumption: us-east-1 Linux On-Demand")
     print(f"Instance: {args.instance_type} at about ${price:.3f}/hr")
     print(f"Runtime: {args.minutes} minutes")
